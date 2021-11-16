@@ -152,6 +152,8 @@ class region_domain_params {
   bool m_is_dereferenceable;
   // reason about unknown regions
   bool m_skip_unknown_regions;
+  // keep track of mru cache
+  bool m_use_mru_regions;
 
   friend class crab_domain_params;  
 public:
@@ -161,20 +163,23 @@ public:
       m_refine_uninitialized_regions(false),
       m_tag_analysis(true),
       m_is_dereferenceable(false),
-      m_skip_unknown_regions(true) {
+      m_skip_unknown_regions(true),
+      m_use_mru_regions(false) {
   }
   region_domain_params(bool allocation_sites,
 		       bool deallocation,
 		       bool refine_uninitialized_regions,
 		       bool tag_analysis,
 		       bool is_dereferenceable,
-		       bool skip_unknown_regions)
+		       bool skip_unknown_regions,
+           bool use_mru_regions)
     : m_allocation_sites(allocation_sites),
       m_deallocation(deallocation),
       m_refine_uninitialized_regions(refine_uninitialized_regions),
       m_tag_analysis(tag_analysis),
       m_is_dereferenceable(is_dereferenceable),
-      m_skip_unknown_regions(skip_unknown_regions) {
+      m_skip_unknown_regions(skip_unknown_regions),
+      m_use_mru_regions(use_mru_regions) {
   }
 
   bool region_allocation_sites() const {
@@ -194,6 +199,9 @@ public:
   }
   bool region_skip_unknown_regions() const {
     return m_skip_unknown_regions;
+  }
+  bool region_use_mru_regions() const {
+    return m_use_mru_regions;
   }
   void update_params(const region_domain_params& p);
   void write(crab::crab_os &o) const;

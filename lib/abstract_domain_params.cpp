@@ -67,6 +67,7 @@ void region_domain_params::update_params(const region_domain_params &params) {
   m_tag_analysis = params.region_tag_analysis();
   m_is_dereferenceable = params.region_is_dereferenceable();
   m_skip_unknown_regions = params.region_skip_unknown_regions(); 
+  m_use_mru_regions = params.region_use_mru_regions();
 }
 
 void region_domain_params::write(crab::crab_os &o) const {
@@ -77,6 +78,7 @@ void region_domain_params::write(crab::crab_os &o) const {
   o << "\ttag_analysis=" << m_tag_analysis << "\n";
   o << "\tis_dereferenceable=" << m_is_dereferenceable << "\n";
   o << "\tskip_unknown_regions=" << m_skip_unknown_regions << "\n";
+  o << "\tuse_mru_regions=" << m_use_mru_regions << "\n";
 }
 
 void zones_domain_params::update_params(const zones_domain_params &params) {
@@ -126,7 +128,8 @@ void crab_domain_params::update_params(const crab_domain_params &p) {
 			   p.region_refine_uninitialized_regions(),
 			   p.region_tag_analysis(),
 			   p.region_is_dereferenceable(),
-			   p.region_skip_unknown_regions());
+			   p.region_skip_unknown_regions(),
+         p.region_use_mru_regions());
   zones_domain_params z_p(p.zones_chrome_dijkstra(),
 			  p.zones_widen_restabilize(),
 			  p.zones_special_assign(),
@@ -209,6 +212,8 @@ void crab_domain_params::set_param(const std::string &param, const std::string &
     region_domain_params::m_is_dereferenceable = to_bool(val);
   } else if (param == "region.skip_unknown_regions") {
     region_domain_params::m_skip_unknown_regions = to_bool(val);
+  } else if (param == "region.use_mru_regions") {
+    region_domain_params::m_use_mru_regions = to_bool(val);
   } else if (param == "zones.chrome_dijkstra") {
     zones_domain_params::m_chrome_dijkstra = to_bool(val);
   } else if (param == "zones.widen_restabilize") {
