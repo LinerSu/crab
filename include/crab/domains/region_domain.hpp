@@ -2,12 +2,14 @@
 
 #include <crab/domains/abstract_domain.hpp>
 #include <crab/domains/abstract_domain_params.hpp>
+#include <crab/domains/apron_domains.hpp>
 #include <crab/domains/boolean.hpp>
 #include <crab/domains/interval.hpp>
 #include <crab/domains/separate_domains.hpp>
 #include <crab/domains/small_range.hpp>
 #include <crab/domains/types.hpp>
 #include <crab/domains/union_find_domain.hpp>
+#include <crab/domains/variable_domain.hpp>
 #include <crab/support/debug.hpp>
 #include <crab/support/stats.hpp>
 #include <crab/types/reference_constraints.hpp>
@@ -406,6 +408,10 @@ private:
       }
     }
 
+    // TODO: generalize expand function
+    void expand(base_abstract_domain_t &dom, base_abstract_domain_t &cache,
+                const std::vector<ghost_variables_t> &rgn_list) const {}
+
     void forget(base_abstract_domain_t &dom) const {
       dom -= m_var;
       if (m_object_offset_size) {
@@ -561,6 +567,30 @@ private:
   base_abstract_domain_t m_base_dom;
   /** End base domain **/
 
+  /** Begin MRU domain **/
+  // The cache abstract domain that capture invariants for MRU object
+  base_abstract_domain_t m_cache_dom;
+  using base_variable_domain_t = variable_domain<base_variable_t>;
+  // left: the base address for cache
+  // right: a region variable to get equivalence class
+  using cache_variable_opt_t =
+      boost::optional<std::pair<base_variable_domain_t, variable_t>>;
+  cache_variable_opt_t m_cache_vars;
+  // key: a reference variable
+  // value: a base variable in the base domain that represents the base address
+  // of the MRU
+  using base_var_map_t =
+      ikos::separate_domain<variable_t, base_variable_domain_t>;
+  base_var_map_t m_base_variable_map;
+
+  // The UF domain keeps equalities between variables
+  // from m_base_variable_map and other references
+  // using uf_domain_t =
+  //   term_domain<term::TDomInfo<number_t, base_variable_t,
+  //   z_interval_domain_t>>;
+  // uf_domain_t m_address_dom;
+  /** End MRU domain **/
+
   // Abstract domain to count how many addresses are in a region.
   // This allows us to decide when strong update is sound: only if
   // one address per region (i.e., singleton).
@@ -605,15 +635,21 @@ private:
   // Tag analysis: map each (any type) variable to a set of tags
   tag_env_t m_tag_env;
 
-  region_domain(
-      base_varname_allocator_t &&alloc, var_map_t &&var_map,
-      rev_var_map_t &&rev_var_map, rgn_counting_env_t &&rgn_counting_dom,
-      rgn_bool_env_t &&rgn_init_dom, rgn_type_env_t &&rgn_type_dom,
-      base_abstract_domain_t &&base_dom, alloc_site_env_t &&alloc_site_dom,
-      rgn_dealloc_t &&rgn_dealloc_dom, tag_env_t &&tag_env)
+  region_domain(base_varname_allocator_t &&alloc, var_map_t &&var_map,
+                rev_var_map_t &&rev_var_map,
+                rgn_counting_env_t &&rgn_counting_dom,
+                rgn_bool_env_t &&rgn_init_dom, rgn_type_env_t &&rgn_type_dom,
+                base_abstract_domain_t &&base_dom,
+                base_abstract_domain_t &&cache_dom,
+                cache_variable_opt_t &&cache_vars,
+                base_var_map_t &&base_variable_map,
+                alloc_site_env_t &&alloc_site_dom,
+                rgn_dealloc_t &&rgn_dealloc_dom, tag_env_t &&tag_env)
       : m_is_bottom(base_dom.is_bottom()), m_alloc(std::move(alloc)),
         m_var_map(std::move(var_map)), m_rev_var_map(std::move(rev_var_map)),
-        m_base_dom(std::move(base_dom)),
+        m_base_dom(std::move(base_dom)), m_cache_dom(std::move(cache_dom)),
+        m_cache_vars(std::move(cache_vars)),
+        m_base_variable_map(std::move(base_variable_map)),
         m_rgn_counting_dom(std::move(rgn_counting_dom)),
         m_rgn_init_dom(std::move(rgn_init_dom)),
         m_rgn_type_dom(std::move(rgn_type_dom)),
@@ -722,6 +758,20 @@ private:
 
     base_varname_allocator_t out_alloc(m_alloc, right.m_alloc);
     base_abstract_domain_t right_dom(right.m_base_dom);
+    base_abstract_domain_t right_cache_dom(right.m_cache_dom);
+    cache_variable_opt_t out_cache_vars = boost::none;
+    if (right.m_cache_vars != boost::none) {
+      if (m_cache_vars != boost::none) {
+        out_cache_vars = right.m_cache_vars;
+      }
+      if (m_cache_vars.get().second != right.m_cache_vars.get().second) {
+        CRAB_ERROR(domain_name(), "::do_join_or_widening: mru cache rgn variable should be consistent",
+            m_cache_vars.get().second, "!=", right.m_cache_vars.get().second);
+      }
+      out_cache_vars = cache_variable_opt_t({m_cache_vars.get().first | right.m_cache_vars.get().first, m_cache_vars.get().second});
+    }
+    base_var_map_t out_base_variable_map(m_base_variable_map |
+                                         right.m_base_variable_map);
     var_map_t out_var_map;
     rev_var_map_t out_rev_var_map;
     base_variable_vector_t left_vars, right_vars, out_vars;
@@ -756,8 +806,13 @@ private:
     m_base_dom.rename(left_vars, out_vars);
     right_dom.project(right_vars);
     right_dom.rename(right_vars, out_vars);
+    m_cache_dom.project(left_vars);
+    m_cache_dom.rename(left_vars, out_vars);
+    right_cache_dom.project(right_vars);
+    right_cache_dom.rename(right_vars, out_vars);
 
     m_base_dom |= right_dom;
+    m_cache_dom |= right_cache_dom;
     m_is_bottom = m_base_dom.is_bottom();
     std::swap(m_alloc, out_alloc);
     std::swap(m_rgn_counting_dom, out_rgn_counting_dom);
@@ -768,6 +823,8 @@ private:
     std::swap(m_var_map, out_var_map);
     std::swap(m_rev_var_map, out_rev_var_map);
     std::swap(m_tag_env, out_tag_env);
+    std::swap(m_cache_vars, out_cache_vars);
+    std::swap(m_base_variable_map, out_base_variable_map);
 
     CRAB_LOG("region", crab::outs() << *this << "\n");
   }
@@ -801,9 +858,25 @@ private:
     // variables).  The domain is finite
     tag_env_t out_tag_env(left.m_tag_env | right.m_tag_env);
 
+    cache_variable_opt_t out_cache_vars = boost::none;
+    if (right.m_cache_vars != boost::none) {
+      if (m_cache_vars != boost::none) {
+        out_cache_vars = right.m_cache_vars;
+      }
+      if (m_cache_vars.get().second != right.m_cache_vars.get().second) {
+        CRAB_ERROR(domain_name(), "::do_join_or_widening: mru cache rgn variable should be consistent",
+            m_cache_vars.get().second, "!=", right.m_cache_vars.get().second);
+      }
+      out_cache_vars = cache_variable_opt_t({m_cache_vars.get().first | right.m_cache_vars.get().first, m_cache_vars.get().second});
+    }
+    base_var_map_t out_base_variable_map(m_base_variable_map |
+                                         right.m_base_variable_map);
+
     base_varname_allocator_t out_alloc(left.m_alloc, right.m_alloc);
     base_abstract_domain_t left_dom(left.m_base_dom);
     base_abstract_domain_t right_dom(right.m_base_dom);
+    base_abstract_domain_t left_cache_dom(left.m_cache_dom);
+    base_abstract_domain_t right_cache_dom(right.m_cache_dom);
     var_map_t out_var_map;
     rev_var_map_t out_rev_var_map;
 
@@ -848,16 +921,23 @@ private:
     left_dom.rename(left_vars, out_vars);
     right_dom.project(right_vars);
     right_dom.rename(right_vars, out_vars);
+    left_cache_dom.project(left_vars);
+    left_cache_dom.rename(left_vars, out_vars);
+    right_cache_dom.project(right_vars);
+    right_cache_dom.rename(right_vars, out_vars);
 
     // Final join or widening
     base_abstract_domain_t out_base_dom(base_dom_op(left_dom, right_dom));
+    base_abstract_domain_t out_cache_dom(base_dom_op(left_cache_dom, right_cache_dom));
 
     region_domain_t res(
         std::move(out_alloc), std::move(out_var_map),
         std::move(out_rev_var_map), std::move(out_rgn_counting_dom),
         std::move(out_rgn_init_dom), std::move(out_rgn_type_dom),
-        std::move(out_base_dom), std::move(out_alloc_site_dom),
-        std::move(out_rgn_dealloc_dom), std::move(out_tag_env));
+        std::move(out_base_dom), std::move(out_cache_dom),
+        std::move(out_cache_vars), std::move(out_base_variable_map),
+        std::move(out_alloc_site_dom), std::move(out_rgn_dealloc_dom),
+        std::move(out_tag_env));
     return res;
   }
 
@@ -877,6 +957,20 @@ private:
                                       right.m_rgn_dealloc_dom);
     tag_env_t out_tag_env(left.m_tag_env & right.m_tag_env);
 
+    cache_variable_opt_t out_cache_vars = boost::none;
+    if (right.m_cache_vars != boost::none) {
+      if (m_cache_vars != boost::none) {
+        out_cache_vars = right.m_cache_vars;
+      }
+      if (m_cache_vars.get().second != right.m_cache_vars.get().second) {
+        CRAB_ERROR(domain_name(), "::do_join_or_widening: mru cache rgn variable should be consistent",
+            m_cache_vars.get().second, "!=", right.m_cache_vars.get().second);
+      }
+      out_cache_vars = cache_variable_opt_t({m_cache_vars.get().first & right.m_cache_vars.get().first, m_cache_vars.get().second});
+    }
+    base_var_map_t out_base_variable_map(m_base_variable_map &
+                                         right.m_base_variable_map);
+
     // This shouldn't happen but just in case ...
     if (out_rgn_counting_dom.is_bottom() || out_rgn_init_dom.is_bottom() ||
         out_rgn_type_dom.is_bottom() || out_rgn_dealloc_dom.is_bottom() ||
@@ -887,6 +981,8 @@ private:
     base_varname_allocator_t out_alloc(left.m_alloc, right.m_alloc);
     base_abstract_domain_t left_dom(left.m_base_dom);
     base_abstract_domain_t right_dom(right.m_base_dom);
+    base_abstract_domain_t left_cache_dom(left.m_cache_dom);
+    base_abstract_domain_t right_cache_dom(right.m_cache_dom);
     var_map_t out_var_map;
     rev_var_map_t out_rev_var_map;
 
@@ -960,6 +1056,8 @@ private:
     // need to project before renaming
     left_dom.project(only_left_vars);
     left_dom.rename(only_left_vars, only_left_out_vars);
+    left_cache_dom.project(only_left_vars);
+    left_cache_dom.rename(only_left_vars, only_left_out_vars);
 
     // append only_right_vars and right_vars
     only_right_vars.insert(only_right_vars.end(), right_vars.begin(),
@@ -970,15 +1068,20 @@ private:
     // need to project before renaming
     right_dom.project(only_right_vars);
     right_dom.rename(only_right_vars, only_right_out_vars);
+    right_cache_dom.project(only_right_vars);
+    right_cache_dom.rename(only_right_vars, only_right_out_vars);
 
     base_abstract_domain_t out_base_dom(base_dom_op(left_dom, right_dom));
+    base_abstract_domain_t out_cache_dom(base_dom_op(left_cache_dom, right_cache_dom));
 
     region_domain_t res(
         std::move(out_alloc), std::move(out_var_map),
         std::move(out_rev_var_map), std::move(out_rgn_counting_dom),
         std::move(out_rgn_init_dom), std::move(out_rgn_type_dom),
-        std::move(out_base_dom), std::move(out_alloc_site_dom),
-        std::move(out_rgn_dealloc_dom), std::move(out_tag_env));
+        std::move(out_base_dom), std::move(out_cache_dom),
+        std::move(out_cache_vars), std::move(out_base_variable_map),
+        std::move(out_alloc_site_dom), std::move(out_rgn_dealloc_dom),
+        std::move(out_tag_env));
     return res;
   }
 
@@ -1325,6 +1428,48 @@ private:
     }
   }
 
+  /* MRU */
+  void commit_cache() {
+    if (!m_cache_dom.is_bottom()) {
+        // 1. join cache and base domain
+        m_base_dom |= m_cache_dom;
+        // 1.a update init
+
+        // 1.b update countaddr
+
+        // 2. flush cache
+        if (auto m_cache_rgn_opt = get_cache_rgn_var()) {
+          variable_vector_t mru_rgn_vec =
+              m_rgn_dealloc_dom.get_equiv_vars_by_var(*m_cache_rgn_opt);
+          base_variable_vector_t mru_rgn_base_vec;
+          mru_rgn_base_vec.reserve(mru_rgn_vec.size());
+          for (auto it = mru_rgn_vec.cbegin(); it != mru_rgn_vec.cend(); ++it) {
+            auto map_it = m_var_map.find(*it);
+            if (map_it != m_var_map.end()) {
+              mru_rgn_base_vec.push_back(map_it->second.get_var());
+            }
+          }
+          m_cache_dom.forget(mru_rgn_base_vec);
+        }
+    }
+  }
+
+  boost::optional<base_variable_domain_t> get_cache_ref_var_dom() {
+    if (m_cache_vars == boost::none) {
+      return boost::none;
+    } else {
+      return (*m_cache_vars).first;
+    }
+  }
+
+  boost::optional<variable_t> get_cache_rgn_var() {
+    if (m_cache_vars == boost::none) {
+      return boost::none;
+    } else {
+      return (*m_cache_vars).second;
+    }
+  }
+
 public:
   region_domain_t make_top() const override { return region_domain_t(true); }
 
@@ -1347,6 +1492,8 @@ public:
   region_domain(const region_domain_t &o)
       : m_is_bottom(o.m_is_bottom), m_alloc(o.m_alloc), m_var_map(o.m_var_map),
         m_rev_var_map(o.m_rev_var_map), m_base_dom(o.m_base_dom),
+        m_cache_dom(o.m_cache_dom), m_cache_vars(o.m_cache_vars),
+        m_base_variable_map(o.m_base_variable_map),
         m_rgn_counting_dom(o.m_rgn_counting_dom),
         m_rgn_init_dom(o.m_rgn_init_dom), m_rgn_type_dom(o.m_rgn_type_dom),
         m_alloc_site_dom(o.m_alloc_site_dom),
@@ -1359,6 +1506,9 @@ public:
         m_var_map(std::move(o.m_var_map)),
         m_rev_var_map(std::move(o.m_rev_var_map)),
         m_base_dom(std::move(o.m_base_dom)),
+        m_cache_dom(std::move(o.m_cache_dom)),
+        m_cache_vars(std::move(o.m_cache_vars)),
+        m_base_variable_map(std::move(o.m_base_variable_map)),
         m_rgn_counting_dom(std::move(o.m_rgn_counting_dom)),
         m_rgn_init_dom(std::move(o.m_rgn_init_dom)),
         m_rgn_type_dom(std::move(o.m_rgn_type_dom)),
@@ -1375,6 +1525,9 @@ public:
       m_var_map = o.m_var_map;
       m_rev_var_map = o.m_rev_var_map;
       m_base_dom = o.m_base_dom;
+      m_cache_dom = o.m_cache_dom;
+      m_cache_vars = o.m_cache_vars;
+      m_base_variable_map = o.m_base_variable_map;
       m_rgn_counting_dom = o.m_rgn_counting_dom;
       m_rgn_init_dom = o.m_rgn_init_dom;
       m_rgn_type_dom = o.m_rgn_type_dom;
@@ -1392,6 +1545,9 @@ public:
       m_var_map = std::move(o.m_var_map);
       m_rev_var_map = std::move(o.m_rev_var_map);
       m_base_dom = std::move(o.m_base_dom);
+      m_cache_dom = std::move(o.m_cache_dom);
+      m_cache_vars = std::move(o.m_cache_vars);
+      m_base_variable_map = std::move(o.m_base_variable_map);
       m_rgn_counting_dom = std::move(o.m_rgn_counting_dom);
       m_rgn_init_dom = std::move(o.m_rgn_init_dom);
       m_rgn_type_dom = std::move(o.m_rgn_type_dom);
@@ -2001,6 +2157,14 @@ public:
       m_alloc_site_dom.set(ref, as);
     }
 
+    /* MRU start */
+    // 1. create a new ref var ref^base
+    base_variable_t ref_base =
+        ghost_variables_t::make_base_variable(m_alloc, ref.get_type());
+    // 2. update it into m_base_variable_map
+    m_base_variable_map.set(ref, ref_base);
+    /* MRU end */
+
     // Assign ghost variables to ref
     ghost_variables_t ref_gvars = get_or_insert_gvars(ref);
 
@@ -2134,7 +2298,63 @@ public:
     }
 
     auto num_refs = m_rgn_counting_dom[rgn];
-    if (num_refs.is_zero() || num_refs.is_one()) {
+
+    /* MRU start */
+    if (crab_domain_params_man::get().region_use_mru_regions()) {
+      if (m_cache_vars != boost::none) {
+        bool res = (*m_cache_vars).first == m_base_variable_map[ref];
+        CRAB_LOG("region-mru",
+            CRAB_WARN("region_mru_domain::ref_load: mru updated? ", res););
+      }
+      // check m_base_variable_map for comparing base address
+      if (m_cache_vars == boost::none ||
+          !(*get_cache_ref_var_dom() == m_base_variable_map[ref])) {
+        // cache miss: MRU object does not match the current reference
+        CRAB_LOG(
+            "region-mru",
+            CRAB_WARN("region_mru_domain::ref_load: cach miss for ", ref, "."););
+        if (auto m_cache_ref_opt = get_cache_ref_var_dom()) {
+          CRAB_LOG("region-mru",
+                  CRAB_WARN("region_mru_domain::ref_load: current mru object: ",
+                            *m_cache_ref_opt, "."););
+        } else {
+          CRAB_LOG("region-mru",
+                  CRAB_WARN("region_mru_domain::ref_load: cache is empty."););
+        }
+        // commit and populate results based on MRU object.
+        if (!m_rgn_dealloc_dom.contains(rgn)) {
+          CRAB_ERROR(domain_name(), "::ref_load: should not lost track");
+        }
+        commit_cache();
+      }
+    }
+    if (crab_domain_params_man::get().region_use_mru_regions()) {
+      // 3. update cache from base for new MRU object
+      auto rgn_vec = m_rgn_dealloc_dom.get_equiv_vars_by_var(rgn);
+      // copy all relationships between all regions from the new MRU object
+      // FIXME: Invoke general version of expand function
+      // YS: I think we need to update m_rgn_counting_dom for a copied region var
+      ghost_variables_t ref_gvars = get_or_insert_gvars(ref);
+      if (auto region_gvars_opt = get_gvars(rgn)) {
+        ghost_variables_t fresh_region_gvars =
+            ghost_variables_t::create(m_alloc, (*region_gvars_opt));
+        (*region_gvars_opt).expand(m_base_dom, fresh_region_gvars);
+        gvars_res.assign(m_cache_dom, fresh_region_gvars);
+      } else {
+        gvars_res.forget(m_cache_dom);
+      }
+
+      // update cache reference & region
+      if (m_cache_vars == boost::none) {
+        m_cache_vars = cache_variable_opt_t({m_base_variable_map[ref], rgn});
+      }
+      else {
+        (*m_cache_vars).first = m_base_variable_map[ref];
+        (*m_cache_vars).second = rgn;
+      }
+    }
+    /* MRU end */
+    else if (num_refs.is_zero() || num_refs.is_one()) {
       // strong read
       CRAB_LOG("region-load", crab::outs() << "Reading from singleton\n";);
       if (auto region_gvars_opt = get_gvars(rgn)) {
@@ -2296,6 +2516,39 @@ public:
     }
 
     auto num_refs = m_rgn_counting_dom[rgn];
+
+    bool use_mru = crab_domain_params_man::get().region_use_mru_regions();
+
+    /* MRU start */
+    if (use_mru) {
+      if (m_cache_vars != boost::none) {
+        bool res = (*m_cache_vars).first == m_base_variable_map[ref];
+        CRAB_LOG("region-mru",
+            CRAB_WARN("region_mru_domain::ref_load: mru updated? ", res););
+      }
+      // check m_base_variable_map for comparing base address
+      if (m_cache_vars == boost::none ||
+          !(*get_cache_ref_var_dom() == m_base_variable_map[ref])) {
+        // cache miss: MRU object does not match the current reference
+        CRAB_LOG(
+            "region-mru",
+            CRAB_WARN("region_mru_domain::ref_load: cach miss for ", ref, "."););
+        if (auto m_cache_ref_opt = get_cache_ref_var_dom()) {
+          CRAB_LOG("region-mru",
+                  CRAB_WARN("region_mru_domain::ref_load: current mru object: ",
+                            *m_cache_ref_opt, "."););
+        } else {
+          CRAB_LOG("region-mru",
+                  CRAB_WARN("region_mru_domain::ref_load: cache is empty."););
+        }
+        // commit and populate results based on MRU object.
+        if (!m_rgn_dealloc_dom.contains(rgn)) {
+          CRAB_ERROR(domain_name(), "::ref_load: should not lost track");
+        }
+        commit_cache();
+      }
+    }
+    /* MRU end */
     // A region can have more than one reference but we can still
     // perform a strong update as long as nobody wrote yet in the
     // region. The use of "is_uninitialized_rgn" avoids fooling the
@@ -2306,12 +2559,28 @@ public:
     //   store_ref(R, r1, v1);
     //   store_ref(R, r2, v2);
     //
-    if (is_uninitialized_rgn || num_refs.is_zero() || num_refs.is_one()) {
+    if (use_mru || is_uninitialized_rgn || num_refs.is_zero() || num_refs.is_one()) {
       /* strong update */
       CRAB_LOG("region-store", crab::outs() << "Performing strong update\n";);
 
       if (is_tracked_rgn) {
-        ref_store(m_base_dom, rgn, val);
+        /* MRU start */
+        if (use_mru) {
+          // 3. update cache from base for new MRU object
+          ref_store(m_cache_dom, rgn, val);
+
+          // update cache reference & region
+          if (m_cache_vars == boost::none) {
+            m_cache_vars = cache_variable_opt_t({m_base_variable_map[ref], rgn});
+          }
+          else {
+            (*m_cache_vars).first = m_base_variable_map[ref];
+            (*m_cache_vars).second = rgn;
+          }
+        /* MRU end */
+        } else {
+          ref_store(m_base_dom, rgn, val);
+        }
       }
 
       if (crab_domain_params_man::get().region_allocation_sites()) {
@@ -2356,6 +2625,7 @@ public:
         }
       }
     }
+
     CRAB_LOG("region-store",
              crab::outs() << "After ref_store(" << rgn << ":" << rgn.get_type()
                           << "," << ref << ":" << ref.get_type() << "," << val
@@ -2386,6 +2656,11 @@ public:
 
     if (!is_bottom()) {
       auto boffset = rename_linear_expr(offset);
+
+      /* MRU start */
+      // update m_base_variable_map for ref2 by given env[ref1]
+      m_base_variable_map.set(ref2, m_base_variable_map[ref1]);
+      /* MRU end */
 
       ghost_variables_t ref1_gvars = get_or_insert_gvars(ref1);
       ghost_variables_t ref2_gvars = get_or_insert_gvars(ref2);
@@ -3238,6 +3513,7 @@ public:
       }
     }
     m_base_dom.forget(base_vars);
+    m_cache_dom.forget(base_vars);
   }
 
   void project(const variable_vector_t &variables) override {
@@ -3261,6 +3537,7 @@ public:
       get_or_insert_gvars(v).add(base_vars);
     }
     m_base_dom.project(base_vars);
+    m_cache_dom.project(base_vars);
 
     // -- update m_var_map and m_rev_var_map
     std::vector<variable_t> var_map_to_remove;
@@ -3374,6 +3651,17 @@ public:
     }
 
     // Rename the rest
+    // m_base_variable_map.rename(from, to);
+    // if (m_cache_vars != boost::none) {
+    //   (*m_cache_vars).first.rename(from, to);
+    //   for (int i = 0; i < from.size(); ++i) {
+    //     auto tmp = from[i];
+    //     if (tmp == (*m_cache_vars).second) {
+    //       (*m_cache_vars).second = to[i];
+    //       break;
+    //     }
+    //   }
+    // }
     m_rgn_counting_dom.rename(from, to);
     m_rgn_init_dom.rename(from, to);
     if (!crab_domain_params_man::get().region_skip_unknown_regions()) {
@@ -3804,7 +4092,13 @@ public:
       ghost_variables_t::mk_renaming_map(m_rev_var_map, get_type_fn,
                                          renaming_map);
       m_alloc.add_renaming_map(renaming_map);
+      o << "BaseDom=";
       o << m_base_dom;
+      if (crab_domain_params_man::get().region_use_mru_regions()) {
+        o << ", ";
+        o << "CacheDom=";
+        o << m_cache_dom;
+      }
       m_alloc.clear_renaming_map();
     }
   }

@@ -514,6 +514,21 @@ public:
     m_parents.insert({y, rep_x});
   }
 
+  std::vector<variable_t> get_equiv_vars_by_var(const variable_t &x) {
+    std::vector<variable_t> out;
+    if (!contains(x)) {
+      return out;
+    }
+    variable_t rep_x = find(x);
+    out.reserve(m_parents.size());
+    for (auto &kv : m_parents) {
+      if (kv.second == rep_x) {
+        out.push_back(kv.first);
+      }
+    }
+    return out;
+  }
+
   void forget(const variable_t &v) {
     if (is_bottom() || is_top()) {
       return;
