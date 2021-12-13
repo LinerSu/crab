@@ -408,10 +408,6 @@ private:
       }
     }
 
-    // TODO: generalize expand function
-    void expand(base_abstract_domain_t &dom, base_abstract_domain_t &cache,
-                const std::vector<ghost_variables_t> &rgn_list) const {}
-
     void forget(base_abstract_domain_t &dom) const {
       dom -= m_var;
       if (m_object_offset_size) {
@@ -1470,6 +1466,21 @@ private:
     }
   }
 
+  // TODO: generalize expand function
+  void flow(base_abstract_domain_t &base_dom, base_abstract_domain_t &cache_dom,
+            variable_vector_t &rgn_list) const {
+    base_variable_vector_t dom_rgn_list;
+    dom_rgn_list.reserve(rgn_list.size());
+    for (auto rgn: rgn_list) {
+      if (auto region_gvars_opt = get_gvars(rgn)) {
+        dom_rgn_list.push_back((*region_gvars_opt).get_var());
+      }
+    }
+    cache_dom.flow(base_dom, dom_rgn_list);
+    cache_dom = cache_dom.make_top();
+    cache_dom = cache_dom & base_dom;
+  }
+
 public:
   region_domain_t make_top() const override { return region_domain_t(true); }
 
@@ -2301,11 +2312,6 @@ public:
 
     /* MRU start */
     if (crab_domain_params_man::get().region_use_mru_regions()) {
-      if (m_cache_vars != boost::none) {
-        bool res = (*m_cache_vars).first == m_base_variable_map[ref];
-        CRAB_LOG("region-mru",
-            CRAB_WARN("region_mru_domain::ref_load: mru updated? ", res););
-      }
       // check m_base_variable_map for comparing base address
       if (m_cache_vars == boost::none ||
           !(*get_cache_ref_var_dom() == m_base_variable_map[ref])) {
@@ -2330,16 +2336,28 @@ public:
     }
     if (crab_domain_params_man::get().region_use_mru_regions()) {
       // 3. update cache from base for new MRU object
-      auto rgn_vec = m_rgn_dealloc_dom.get_equiv_vars_by_var(rgn);
+      variable_vector_t rgn_vec =
+          m_rgn_dealloc_dom.get_equiv_vars_by_var(rgn);
       // copy all relationships between all regions from the new MRU object
       // FIXME: Invoke general version of expand function
-      // YS: I think we need to update m_rgn_counting_dom for a copied region var
       ghost_variables_t ref_gvars = get_or_insert_gvars(ref);
+      // if (auto region_gvars_opt = get_gvars(rgn)) {
+      //   ghost_variables_t fresh_region_gvars =
+      //       ghost_variables_t::create(m_alloc, (*region_gvars_opt));
+      //   (*region_gvars_opt).expand(m_base_dom, fresh_region_gvars);
+      //   gvars_res.assign(m_cache_dom, fresh_region_gvars);
+      // } else {
+      //   gvars_res.forget(m_cache_dom);
+      // }
+      // New expand function:
+      // Given base_domain:
+      // obj |-> { rgn^1, ..., rgn^n }
+      // Copy relations into cache domains.
+      flow(m_base_dom, m_cache_dom, rgn_vec);
+      // perform strong read
+      CRAB_LOG("region-load", crab::outs() << "Reading from singleton\n";);
       if (auto region_gvars_opt = get_gvars(rgn)) {
-        ghost_variables_t fresh_region_gvars =
-            ghost_variables_t::create(m_alloc, (*region_gvars_opt));
-        (*region_gvars_opt).expand(m_base_dom, fresh_region_gvars);
-        gvars_res.assign(m_cache_dom, fresh_region_gvars);
+        gvars_res.assign(m_cache_dom, *region_gvars_opt);
       } else {
         gvars_res.forget(m_cache_dom);
       }
@@ -2521,29 +2539,25 @@ public:
 
     /* MRU start */
     if (use_mru) {
-      if (m_cache_vars != boost::none) {
-        bool res = (*m_cache_vars).first == m_base_variable_map[ref];
-        CRAB_LOG("region-mru",
-            CRAB_WARN("region_mru_domain::ref_load: mru updated? ", res););
-      }
       // check m_base_variable_map for comparing base address
       if (m_cache_vars == boost::none ||
           !(*get_cache_ref_var_dom() == m_base_variable_map[ref])) {
         // cache miss: MRU object does not match the current reference
-        CRAB_LOG(
-            "region-mru",
-            CRAB_WARN("region_mru_domain::ref_load: cach miss for ", ref, "."););
+        CRAB_LOG("region-mru",
+                 CRAB_WARN("region_mru_domain::ref_store: cach miss for ", ref,
+                           "."););
         if (auto m_cache_ref_opt = get_cache_ref_var_dom()) {
-          CRAB_LOG("region-mru",
-                  CRAB_WARN("region_mru_domain::ref_load: current mru object: ",
-                            *m_cache_ref_opt, "."););
+          CRAB_LOG(
+              "region-mru",
+              CRAB_WARN("region_mru_domain::ref_store: current mru object: ",
+                        *m_cache_ref_opt, "."););
         } else {
           CRAB_LOG("region-mru",
-                  CRAB_WARN("region_mru_domain::ref_load: cache is empty."););
+                   CRAB_WARN("region_mru_domain::ref_store: cache is empty."););
         }
         // commit and populate results based on MRU object.
         if (!m_rgn_dealloc_dom.contains(rgn)) {
-          CRAB_ERROR(domain_name(), "::ref_load: should not lost track");
+          CRAB_ERROR(domain_name(), "::ref_store: should not lost track");
         }
         commit_cache();
       }
@@ -2567,6 +2581,9 @@ public:
         /* MRU start */
         if (use_mru) {
           // 3. update cache from base for new MRU object
+          variable_vector_t rgn_vec =
+              m_rgn_dealloc_dom.get_equiv_vars_by_var(rgn);
+          flow(m_base_dom, m_cache_dom, rgn_vec);
           ref_store(m_cache_dom, rgn, val);
 
           // update cache reference & region

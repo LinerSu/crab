@@ -407,6 +407,9 @@ public:
   // Make a new copy of var without relating var with new_var
   virtual void expand(const variable_t &var, const variable_t &new_var) = 0;
 
+  // Make a new copy of var from a domain into another domain
+  virtual void flow(const Dom &abs, const variable_vector_t &rgn_list) {}
+
   // Function whose semantics is defined by the particular abstract
   // domain
   virtual void intrinsic(std::string name,

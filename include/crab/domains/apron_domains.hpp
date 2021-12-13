@@ -1652,6 +1652,16 @@ public:
     m_var_map.insert(binding_t(dup, get_dims() - 1));
   }
 
+  // void flow(const Dom &abs, const variable_vector_t &rgn_list) override {
+  //   crab::CrabStats::count(domain_name() + ".count.flow");
+  //   crab::ScopedCrabStats __st__(domain_name() + ".flow");
+
+  //   if (is_bottom() || is_top())
+  //     return;
+
+    
+  // }
+
   void normalize() override {
     crab::CrabStats::count(domain_name() + ".count.normalize");
     crab::ScopedCrabStats __st__(domain_name() + ".normalize");

@@ -13,7 +13,7 @@
 namespace crab {
 namespace domains {
 /**
- *  Each variable is mapped to an element in this lattice:
+ *  Each address variable is mapped to an element in this lattice:
  *
  *                 top
  *                  |
@@ -21,7 +21,7 @@ namespace domains {
  *                  |
  *                bottom
  *
- * top means that it might not be a variable
+ * top means that it might refer to multiple objects
  **/
 template <typename VariableName> class variable_domain {
   boost::optional<VariableName> m_variable;
