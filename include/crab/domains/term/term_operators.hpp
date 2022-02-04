@@ -26,6 +26,9 @@ public:
   constexpr bool is_reserved() const { return m_reserved;}
   constexpr static uint32_t first_nonreserved_value() { return 100;}  
   friend crab::crab_os &operator<<(crab::crab_os &o, term_operator_t op);
+  bool compare(term_operator_t &t) {
+    return m_value == t.m_value;
+  }
 };
 
 constexpr term_operator_t TERM_OP_ADD(0);

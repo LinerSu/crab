@@ -17,7 +17,6 @@
 #include <crab/domains/intervals.hpp>
 #include <crab/domains/powerset_domain.hpp>
 #include <crab/domains/region_domain.hpp>
-#include <crab/domains/mru_region_domain.hpp>
 #include <crab/domains/sign_domain.hpp>
 #include <crab/domains/sign_constant_domain.hpp>
 #include <crab/domains/sparse_dbm.hpp>
@@ -25,6 +24,7 @@
 #include <crab/domains/split_oct.hpp>
 #include <crab/domains/term_equiv.hpp>
 #include <crab/domains/wrapped_interval_domain.hpp>
+#include <crab/domains/mru_region_domain.hpp>
 
 namespace crab {
 
@@ -139,4 +139,10 @@ using q_oct_elina_domain_t = elina_domain<q_number, varname_t, ELINA_OCT>;
 using z_abs_domain_t = abstract_domain_ref<z_var>;
 using q_abs_domain_t = abstract_domain_ref<q_var>;
 } // namespace domain_impl
+
+namespace mru_domain_impl {
+  using namespace crab::domain_impl;
+  using z_rgn_zones_params_t = TestRegionParams<z_soct_domain_t>;
+  using z_mru_rgn_zones_t = mru_region_domain<z_rgn_zones_params_t>;
+}
 } // namespace crab

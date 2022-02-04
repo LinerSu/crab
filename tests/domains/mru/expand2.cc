@@ -1,6 +1,6 @@
 #include "../../common.hpp"
 #include "../../program_options.hpp"
-#include <crab/domains/uf_domain.hpp>
+#include <crab/domains/mru_region_domain.hpp>
 
 using namespace std;
 using namespace crab::domain_impl;
@@ -20,10 +20,13 @@ void simulate_obj_map_update_per_object(z_mru_rgn_zones_t &mru_mem,
   variable_t representative = rgn_vars[0];
   for (int i = 0, sz = rgn_vars.size(); i < sz; ++i) {
     // update object region map
-    if (i == 0) {
-      mru_mem.m_obj_rgn_map.insert({rgn_vars[i], rgn_vars});
+    if (i == 0) { // also make it as merging representative
+      mru_mem.m_obj_rgn_map.set(rgn_vars[i], boolean_value::get_false());
     }
-    mru_mem.m_rev_obj_rgn_map.insert({rgn_vars[i], representative});
+    else {
+      mru_mem.m_obj_rgn_map.set(rgn_vars[i], boolean_value::get_false());
+      mru_mem.m_obj_rgn_map.join(rgn_vars[0], rgn_vars[i]);
+    }
   }
 }
 

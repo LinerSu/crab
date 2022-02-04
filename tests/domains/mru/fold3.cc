@@ -1,6 +1,6 @@
 #include "../../common.hpp"
 #include "../../program_options.hpp"
-#include <crab/domains/uf_domain.hpp>
+#include <crab/domains/mru_region_domain.hpp>
 
 using namespace std;
 using namespace crab::domain_impl;

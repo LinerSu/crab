@@ -102,6 +102,7 @@ public:
 private:
   using union_find_domain_t = union_find_domain<Variable, Domain, MergeSemantics>;
   using parents_map_t = std::unordered_map<variable_t, variable_t>;
+  using variable_vector_t = std::vector<variable_t>;
 public:
   using variable_set_t = ikos::discrete_domain<variable_t>;  
   using equivalence_class_vars_t = std::unordered_map<variable_t, variable_set_t>;
@@ -578,8 +579,20 @@ public:
       }
     }
     return res;
-  }  
-  
+  }
+
+  void get_all_equiv_variables(const variable_t &v, variable_vector_t &out) {
+    variable_t rep_v = find(v);
+    equivalence_class_vars_t map = equiv_classes_vars();
+    auto it = map.find(rep_v);
+    if (it != map.end()) {
+      out.reserve(it->second.size());
+      for (auto v : it->second) {
+        out.push_back(v);
+      }
+    }
+  }
+
   /* =============================================================
    *                     Abstract domain API
    * =============================================================
