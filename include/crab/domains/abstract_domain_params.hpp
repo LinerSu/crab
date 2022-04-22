@@ -199,6 +199,22 @@ public:
   void write(crab::crab_os &o) const;
 };
 
+class object_domain_params {
+  bool m_reduce_everywhere;
+
+  friend class crab_domain_params;  
+public:
+  object_domain_params() : m_reduce_everywhere(false) {}
+  object_domain_params(bool reduce_everywhere) 
+    : m_reduce_everywhere(reduce_everywhere) {}
+
+  bool reduce_everywhere() const {
+    return m_reduce_everywhere;
+  }
+  void update_params(const object_domain_params& p);
+  void write(crab::crab_os &o) const;
+};
+
 class zones_domain_params {
   bool m_chrome_dijkstra;
   bool m_widen_restabilize;
@@ -285,6 +301,7 @@ class crab_domain_params: public elina_domain_params,
 			  public powerset_domain_params,
 			  public region_domain_params,
 			  public zones_domain_params,
+        public object_domain_params,
 			  public oct_domain_params {
 public:
   // To resolve ambiguous name lookup
@@ -293,6 +310,7 @@ public:
   using boxes_domain_params::update_params;
   using powerset_domain_params::update_params;
   using region_domain_params::update_params;
+  using object_domain_params::update_params;
   using zones_domain_params::update_params;
   using oct_domain_params::update_params; 
   
@@ -302,6 +320,7 @@ public:
       boxes_domain_params(),
       powerset_domain_params(),
       region_domain_params(),
+      object_domain_params(),
       zones_domain_params(),
       oct_domain_params() {
   }
@@ -324,6 +343,7 @@ public:
      - region.tag_analysis: bool
      - region.is_dereferenceable: bool
      - region.skip_unknown_regions: bool
+     - object.reduce_everywhere: bool
      - zones.chrome_dijkstra: bool
      - zones.widen_restabilize: bool
      - zones.special_assign: bool
