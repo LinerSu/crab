@@ -300,8 +300,8 @@ class crab_domain_params: public elina_domain_params,
 			  public boxes_domain_params,
 			  public powerset_domain_params,
 			  public region_domain_params,
+			  public object_domain_params,
 			  public zones_domain_params,
-        public object_domain_params,
 			  public oct_domain_params {
 public:
   // To resolve ambiguous name lookup
