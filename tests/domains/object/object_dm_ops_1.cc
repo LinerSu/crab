@@ -50,6 +50,9 @@ int main(int argc, char **argv) {
 
   z_var rgn4(vfac["V_d"], crab::REG_INT_TYPE, 32);
   z_var rgn5(vfac["V_e"], crab::REG_INT_TYPE, 32);
+  z_var rgn6(vfac["V_f"], crab::REG_INT_TYPE, 32);
+  z_var rgn7(vfac["V_g"], crab::REG_INT_TYPE, 32);
+  z_var rgn8(vfac["V_h"], crab::REG_INT_TYPE, 32);
 
   // Create allocation sites
   crab::tag_manager as_man;
@@ -101,21 +104,6 @@ int main(int argc, char **argv) {
   base: { 0 < objA && p = objA && r = p + 4 && V_a = 0 && x = 0 && V_b = 1 && y
   = 1 }, addrs: { objA == p && objA == q }, uf_regs: {}, odi_map : empty
   */
-  {
-    crab::outs()
-        << "=== forget & project 1: state contains singleton objects ===\n";
-
-    crab::outs() << "forget " << x << ", " << rgn2 << " at \n"
-                 << inv1 << "\n=> \n";
-    z_obj_zones_t inv2 = inv1;
-    inv2.forget({x, rgn2});
-    crab::outs() << inv2 << "\n";
-    crab::outs() << "project " << x << ", " << rgn2 << " at \n"
-                 << inv1 << "\n=> \n";
-    inv2 = inv1;
-    inv2.project({x, rgn2});
-    crab::outs() << inv2 << "\n";
-  }
 
   // Object moves into odi map
   z_obj_zones_t inv3 = inv1;
@@ -136,20 +124,6 @@ int main(int argc, char **argv) {
       uf_flds: {}
     )
   */
-  {
-    crab::outs() << "=== forget & project 2: object uses odi map ===\n";
-
-    crab::outs() << "forget " << t << ", " << rgn2 << " at \n"
-                 << inv3 << "\n=> \n";
-    z_obj_zones_t inv2 = inv3;
-    inv2.forget({x, rgn2});
-    crab::outs() << inv2 << "\n";
-    crab::outs() << "project " << y << ", " << rgn1 << " at \n"
-                 << inv3 << "\n=> \n";
-    inv2 = inv3;
-    inv2.project({y, rgn1});
-    crab::outs() << inv2 << "\n";
-  }
 
   // Use new mru object
   z_obj_zones_t inv5 = inv3;
@@ -169,6 +143,38 @@ int main(int argc, char **argv) {
       uf_flds: { V_a = $symb0,  V_b = $symb1 }
     )
   */
+
+  /*====================== rename, project & forget ops ======================*/
+  {
+    crab::outs()
+        << "=== forget & project 1: state contains singleton objects ===\n";
+
+    crab::outs() << "forget " << x << ", " << rgn2 << " at \n"
+                 << inv1 << "\n=> \n";
+    z_obj_zones_t inv2 = inv1;
+    inv2.forget({x, rgn2});
+    crab::outs() << inv2 << "\n";
+    crab::outs() << "project " << x << ", " << rgn2 << " at \n"
+                 << inv1 << "\n=> \n";
+    inv2 = inv1;
+    inv2.project({x, rgn2});
+    crab::outs() << inv2 << "\n";
+  }
+
+  {
+    crab::outs() << "=== forget & project 2: object uses odi map ===\n";
+
+    crab::outs() << "forget " << t << ", " << rgn2 << " at \n"
+                 << inv3 << "\n=> \n";
+    z_obj_zones_t inv2 = inv3;
+    inv2.forget({x, rgn2});
+    crab::outs() << inv2 << "\n";
+    crab::outs() << "project " << y << ", " << rgn1 << " at \n"
+                 << inv3 << "\n=> \n";
+    inv2 = inv3;
+    inv2.project({y, rgn1});
+    crab::outs() << inv2 << "\n";
+  }
   {
     crab::outs() << "=== forget & project 3: object uses odi map, reg dom "
                     "contains equalities ===\n";
@@ -205,5 +211,67 @@ int main(int argc, char **argv) {
     inv6.rename({x, rgn2, p}, {z, rgn3, p2});
     crab::outs() << inv6 << "\n";
   }
+
+  /*====================== intrinsic ops ======================*/
+  {
+    z_obj_zones_t inv_obj_single_fld = inv1;
+    inv_obj_single_fld.region_init(rgn6);
+    inv_obj_single_fld.region_init(rgn7);
+    inv_obj_single_fld.ref_make(s, rgn6, size12, as_man.mk_tag());
+    inv_obj_single_fld += (s > 0);
+    inv_obj_single_fld.ref_store(s, rgn6, four32);  // store_ref(V_f, s, 4)
+    inv_obj_single_fld.ref_make(t, rgn7, size12, as_man.mk_tag());
+    inv_obj_single_fld += (t > 0);
+    inv_obj_single_fld.ref_store(t, rgn7, five32);  // store_ref(V_g, t, 5)
+    inv_obj_single_fld.ref_make(p2, rgn7, size12, as_man.mk_tag());
+    inv_obj_single_fld += (p2 > 0);
+    /* inv_obj_single_fld:
+    base: { 0 < objA && p = objA && r = p + 4 && V_a = 0 && x = 0 
+            && V_b = 1 && y = 1 && s > 0 && V_f = 4 && t > 0 && p2 > 0 },
+    addrs: { objA == p && objA == q },
+    uf_regs: {},
+    odi_map:
+      objV_g(
+        sum: { V_g = 5 },
+        cache: {},
+        uf_flds: {}
+      )
+    */
+    crab::outs() << "=== intrinsic 1: test handling object with one field ===\n";
+    crab::outs() << inv_obj_single_fld << "\n";
+  }
+
+  {
+    z_obj_zones_t copied_obj = inv3;
+    crab::outs() << copied_obj << "\n";
+    copied_obj.region_copy(rgn6, rgn1);
+    copied_obj.region_copy(rgn7, rgn2);
+    copied_obj.region_copy(rgn8, rgn3);
+    variable_or_constant_vector_t obj3;
+    obj3.push_back(variable_or_constant(rgn6));
+    obj3.push_back(variable_or_constant(rgn7));
+    obj3.push_back(variable_or_constant(rgn8));
+    copied_obj.intrinsic("regions_from_memory_object", obj3, {});
+    /* copied_obj:
+    base: { 0 < objA && p = objA && r = p + 4 && objA2 > 0
+            && s = objA2 && t = s + 4 && x = 0 && y = 1 },
+    addrs: { objA == p && objA == q && objA2 == s && s == t && mru_A == t },
+    uf_regs: {},
+    odi_map:
+      objA(
+        sum: { V_a = 0 && V_b = 1 },
+        cache: { V_a = 6 && V_b = 12 },
+        uf_flds: {}
+      )
+      objB(
+        sum: { 0 <= V_f <= 6 && 1 <= V_g <= 12 && V_f < V_g },
+        cache: {},
+        uf_flds: {}
+      )
+    */
+    crab::outs() << "=== intrinsic 2: test handling object with copied ===\n";
+    crab::outs() << copied_obj << "\n";
+  }
+
   return 0;
 }

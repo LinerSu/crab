@@ -268,6 +268,14 @@ private:
           object_domain_t, base_abstract_domain_t>;
   using ghost_variables_t = typename ghost_var_man_t::ghost_variables_t;
   using ghost_variable_vector_t = typename std::vector<ghost_variables_t>;
+
+  // Region copied map
+  // Map keeps a region variable to a source region variable by copied
+  // instruction. Since our model is object based, the copied region statement
+  // is before intrinsic call.
+  using rgn_copied_info_map_t =
+      std::shared_ptr<std::unordered_map<variable_t, variable_t>>;
+
   /**------------------ End type definitions ------------------**/
 
   /**------------------ Begin class field definitions ------------------**/
@@ -331,6 +339,10 @@ private:
   // we only keep array, integer or boolean variables
   // Details: https://github.com/seahorn/crab/wiki/IndexedNamesAndTypedVariables
   ghost_var_man_t m_ghost_var_man;
+
+  // Map a copied region variable to a source region variable
+  // In crab IR, the region can be copied into a local context
+  rgn_copied_info_map_t m_rgn_copied_info_map;
   /**------------------ End class field definitions ------------------**/
 
   /**------------------ Begin helper method definitions ------------------**/
@@ -340,12 +352,14 @@ private:
                 uf_register_abstract_domain_t &&uf_regs_dom,
                 obj_info_env_t &&obj_info_env, obj_flds_id_map_t &&flds_id_map,
                 refs_base_addrs_map_t &&refs_base_addrs_map,
-                ghost_var_man_t &&ghost_var_man)
+                ghost_var_man_t &&ghost_var_man,
+                rgn_copied_info_map_t &&rgn_copied_info_map)
       : m_is_bottom(base_dom.is_bottom()), m_base_dom(base_dom),
         m_odi_map(odi_map), m_addrs_dom(addrs_dom), m_uf_regs_dom(uf_regs_dom),
         m_obj_info_env(obj_info_env), m_flds_id_map(flds_id_map),
         m_refs_base_addrs_map(refs_base_addrs_map),
-        m_ghost_var_man(ghost_var_man) {}
+        m_ghost_var_man(ghost_var_man),
+        m_rgn_copied_info_map(rgn_copied_info_map) {}
 
   std::function<variable_type(const variable_t &)> get_type() const {
     auto fn = [](const variable_t &v) { return v.get_type(); };
@@ -488,6 +502,9 @@ private:
     assert(m_flds_id_map == right.m_flds_id_map);
     if (right.m_refs_base_addrs_map && !m_refs_base_addrs_map) {
       m_refs_base_addrs_map = right.m_refs_base_addrs_map;
+    }
+    if (right.m_rgn_copied_info_map && !m_rgn_copied_info_map) {
+      m_rgn_copied_info_map = right.m_rgn_copied_info_map;
     }
 
     // 2. join the odi map
@@ -666,11 +683,16 @@ private:
                                    : right.m_refs_base_addrs_map;
     ghost_var_man_t out_ghost_var_man(left.m_ghost_var_man);
 
+    rgn_copied_info_map_t out_rgn_copied_info_map =
+        left.m_rgn_copied_info_map ? left.m_rgn_copied_info_map
+                                   : right.m_rgn_copied_info_map;
+
     object_domain_t res(std::move(out_base_dom), std::move(out_odi_map),
                         std::move(out_addrs_dom), std::move(out_uf_regs_dom),
                         std::move(out_obj_info_env), std::move(out_flds_id_map),
                         std::move(out_refs_base_addrs_map),
-                        std::move(out_ghost_var_man));
+                        std::move(out_ghost_var_man),
+                        std::move(out_rgn_copied_info_map));
     return res;
   }
 
@@ -844,11 +866,16 @@ private:
 
     ghost_var_man_t out_ghost_var_man(left.m_ghost_var_man);
 
+    rgn_copied_info_map_t out_rgn_copied_info_map =
+        left.m_rgn_copied_info_map ? left.m_rgn_copied_info_map
+                                   : right.m_rgn_copied_info_map;
+
     object_domain_t res(std::move(out_base_dom), std::move(out_odi_map),
                         std::move(out_addrs_dom), std::move(out_uf_regs_dom),
                         std::move(out_obj_info_env), std::move(out_flds_id_map),
                         std::move(out_refs_base_addrs_map),
-                        std::move(out_ghost_var_man));
+                        std::move(out_ghost_var_man),
+                        std::move(out_rgn_copied_info_map));
     return res;
   }
 
@@ -917,6 +944,7 @@ private:
   }
 
   obj_id_t get_obj_id_or_fail(variable_t rgn) {
+    // map must exists before calling this method
     assert(m_flds_id_map);
     auto it = (*m_flds_id_map).find(rgn);
     if (it == (*m_flds_id_map).end()) {
@@ -928,6 +956,7 @@ private:
   }
 
   void get_obj_flds(const obj_id_t &id, variable_vector_t &obj_flds) const {
+    // map must exists before calling this method
     assert(m_flds_id_map);
     for (auto kv : (*m_flds_id_map)) {
       if (kv.second == id) {
@@ -974,6 +1003,49 @@ private:
   }
 
   bool is_rgn_obj_id(variable_t rgn, obj_id_t id) { return id == rgn; }
+
+  void update_copied_info_map(const variable_t &cc_rgn,
+                              const variable_t &src_rgn) {
+    if (!m_rgn_copied_info_map) {
+      m_rgn_copied_info_map =
+          std::make_shared<std::unordered_map<variable_t, variable_t>>();
+    }
+    auto it = (*m_rgn_copied_info_map).find(cc_rgn);
+    if (it != (*m_rgn_copied_info_map).end()) {
+      it->second = src_rgn;
+    } else {
+      (*m_rgn_copied_info_map).insert({cc_rgn, src_rgn});
+    }
+  }
+
+  obj_id_t get_src_obj_id_or_fail(const obj_id_t &id) {
+    // map must exists before calling this method
+    assert(m_rgn_copied_info_map);
+    auto it = (*m_rgn_copied_info_map).find(id);
+    if (it == (*m_rgn_copied_info_map).end()) {
+      CRAB_ERROR(domain_name(),
+                 "::get_src_obj_id_or_fail, the copied region map does not "
+                 "include an object that ",
+                 id, " copied.");
+    }
+    return get_obj_id_or_fail(it->second);
+  }
+
+  void get_src_flds_by_copied_flds(const variable_vector_t &copied_flds,
+                                   variable_vector_t &src_flds) {
+    // map must exists before calling this method
+    assert(m_rgn_copied_info_map);
+    for (auto &v : copied_flds) {
+      auto it = (*m_rgn_copied_info_map).find(v);
+      if (it == (*m_rgn_copied_info_map).end()) {
+        CRAB_ERROR(domain_name(),
+                   "::get_src_flds_by_copied_flds, the copied region map does "
+                   "not include a region that ",
+                   v, " copied.");
+      }
+      src_flds.push_back(it->second);
+    }
+  }
 
   /***************** Base address operations *****************/
   // get or create a variable representing the base address by given a reference
@@ -1268,6 +1340,7 @@ private:
       m_addrs_dom.assign(mru_obj_base, get_or_insert_base_addr(ref));
       m_obj_info_env.set(
           id, object_domain_impl::object_info((*obj_info_ref).refcount_val(),
+                                              (*obj_info_ref).iscopied_val(),
                                               // Cache is used
                                               boolean_value::get_true(),
                                               // Cache is not dirty
@@ -1728,7 +1801,8 @@ public:
         m_uf_regs_dom(o.m_uf_regs_dom), m_obj_info_env(o.m_obj_info_env),
         m_flds_id_map(o.m_flds_id_map),
         m_refs_base_addrs_map(o.m_refs_base_addrs_map),
-        m_ghost_var_man(o.m_ghost_var_man) {
+        m_ghost_var_man(o.m_ghost_var_man),
+        m_rgn_copied_info_map(o.m_rgn_copied_info_map) {
     crab::CrabStats::count(domain_name() + ".count.copy");
     crab::ScopedCrabStats __st__(domain_name() + ".copy");
   }
@@ -1741,7 +1815,8 @@ public:
         m_obj_info_env(std::move(o.m_obj_info_env)),
         m_flds_id_map(std::move(o.m_flds_id_map)),
         m_refs_base_addrs_map(std::move(o.m_refs_base_addrs_map)),
-        m_ghost_var_man(std::move(o.m_ghost_var_man)) {}
+        m_ghost_var_man(std::move(o.m_ghost_var_man)),
+        m_rgn_copied_info_map(std::move(o.m_rgn_copied_info_map)) {}
 
   object_domain_t &operator=(const object_domain_t &o) {
     crab::CrabStats::count(domain_name() + ".count.copy");
@@ -1756,6 +1831,7 @@ public:
       m_flds_id_map = o.m_flds_id_map;
       m_refs_base_addrs_map = o.m_refs_base_addrs_map;
       m_ghost_var_man = o.m_ghost_var_man;
+      m_rgn_copied_info_map = o.m_rgn_copied_info_map;
     }
     return *this;
   }
@@ -1771,6 +1847,7 @@ public:
       m_flds_id_map = std::move(o.m_flds_id_map);
       m_refs_base_addrs_map = std::move(o.m_refs_base_addrs_map);
       m_ghost_var_man = std::move(o.m_ghost_var_man);
+      m_rgn_copied_info_map = std::move(o.m_rgn_copied_info_map);
     };
     return *this;
   }
@@ -1955,6 +2032,8 @@ public:
       m_obj_info_env.set(rgn, object_domain_impl::object_info(
                                   // No references owned by the object
                                   small_range::zero(),
+                                  // Object is not copied from another one
+                                  boolean_value::get_false(),
                                   // Cache is not used
                                   boolean_value::get_false(),
                                   // Cache is not dirty
@@ -2028,6 +2107,7 @@ public:
 
       m_obj_info_env.set(*id_opt, object_domain_impl::object_info(
                                       old_obj_info.refcount_val().increment(),
+                                      old_obj_info.iscopied_val(),
                                       old_obj_info.cacheused_val(),
                                       old_obj_info.cachedirty_val()));
     }
@@ -2316,6 +2396,7 @@ public:
         // update object info
         m_obj_info_env.set(*id_opt, object_domain_impl::object_info(
                                         (*obj_info_ref).refcount_val(),
+                                        (*obj_info_ref).iscopied_val(),
                                         // Cache is used
                                         boolean_value::get_true(),
                                         // Cache is dirty
@@ -2428,8 +2509,9 @@ public:
       perform_reduction();
 
       // We represent reference as numerical in domain
-      m_base_dom.assign(int_var, ref_var);
-      m_addrs_dom -= get_or_insert_base_addr(ref_var);
+      ghost_variables_t ref_gvars = get_or_insert_gvars(ref_var);
+      ghost_variables_t int_gvars = get_or_insert_gvars(int_var);
+      m_base_dom.assign(int_gvars.get_var(), ref_gvars.get_var());
     }
   }
 
@@ -2478,6 +2560,53 @@ public:
     if (is_bottom()) {
       return;
     }
+
+    // REDUCTION: perform reduction
+    perform_reduction();
+
+    if (auto id_opt = get_obj_id(rhs_rgn)) {
+      // retrieve an abstract object info
+      auto rhs_obj_info_ref = m_obj_info_env.find(*id_opt);
+      if (!rhs_obj_info_ref) { // object goes to top
+        return;
+      }
+      assert(rhs_obj_info_ref); // The object info must exsits
+
+      const small_range &num_refs = (*rhs_obj_info_ref).refcount_val();
+
+      // In crab IR, the number of references cannot be zero
+      //  if ref_load access a not null reference.
+      // So zero case should not exist
+      assert(!num_refs.is_zero());
+
+      if (num_refs.is_one()) { // singleton object
+        // it is easy to because we treat each field of the singleton object as
+        // register.
+        const ghost_variables_t &base_lhs = get_or_insert_gvars(lhs_rgn);
+        const ghost_variables_t &base_rhs = get_or_insert_gvars(rhs_rgn);
+        // the rhs region is a singleton then we use assign
+        base_lhs.assign(m_base_dom, base_rhs);
+      }
+      // Note that, if object stores in odi map, it requires more information
+      // such as object id and corresponding lhs's object subdomains:
+      // summary, cache, uf_dom.
+      // To copy this object, we need to handle inside intrinsic method
+
+      // Update object info environment
+      m_obj_info_env.set(lhs_rgn, object_domain_impl::object_info(
+                                      (*rhs_obj_info_ref).refcount_val(),
+                                      // Object is copied
+                                      boolean_value::get_true(),
+                                      (*rhs_obj_info_ref).cacheused_val(),
+                                      (*rhs_obj_info_ref).cachedirty_val()));
+    }
+
+    // the region copy does not give enough information about object
+    // treat single rhs region as one object at first
+    // the object info and maps can be updated upon intrinsic method
+    update_fields_id_map(lhs_rgn, lhs_rgn);
+
+    update_copied_info_map(lhs_rgn, rhs_rgn);
 
     CRAB_LOG("object", crab::outs()
                            << "After region_copy(" << lhs_rgn << ":"
@@ -3161,7 +3290,7 @@ public:
       assert(inputs.size() >= 1);
       error_if_not_rgn(inputs[0]);
       obj_id_t obj_id = inputs[0].get_variable();
-      for (int i = 0, sz = inputs.size(); i < sz; ++i) {
+      for (int i = 1, sz = inputs.size(); i < sz; ++i) {
         error_if_not_rgn(inputs[i]); // this should not happen
         if (inputs[i].get_type().is_unknown_region()) {
           // get_or_insert_gvars does not support unknown regions so we bail
@@ -3174,14 +3303,51 @@ public:
         m_obj_info_env -= inputs[i].get_variable();
       }
 
-      // initialize information for an abstract object for object
-      m_obj_info_env.set(obj_id, object_domain_impl::object_info(
-                                     // No references owned by the object
-                                     small_range::zero(),
-                                     // Cache is not used
-                                     boolean_value::get_false(),
-                                     // Cache is not dirty
-                                     boolean_value::get_false()));
+      auto obj_info_ref = m_obj_info_env.find(obj_id);
+
+      if (obj_info_ref &&
+          (*obj_info_ref).refcount_val() == small_range::oneOrMore() &&
+          (*obj_info_ref).iscopied_val().is_true()) {
+        // the object is copied from one object and the source is from odi map
+        const obj_id_t &src_obj_id = get_src_obj_id_or_fail(obj_id);
+        const odi_domain_product_t *src_prod_ref = m_odi_map.find(src_obj_id);
+        if (src_prod_ref) {
+          odi_domain_product_t o_prod = *src_prod_ref;
+          auto src_obj_info_ref = m_obj_info_env.find(src_obj_id);
+          commit_cache_if_dirty(m_base_dom, m_uf_regs_dom, o_prod,
+                                src_obj_info_ref, src_obj_id);
+          variable_vector_t copied_flds;
+          get_obj_flds(obj_id, copied_flds);
+          variable_vector_t src_flds;
+          src_flds.reserve(copied_flds.size());
+          get_src_flds_by_copied_flds(copied_flds, src_flds);
+          m_ghost_var_man.rename(src_flds, copied_flds, o_prod.first());
+          m_ghost_var_man.rename(src_flds, copied_flds,
+                                 o_prod.second().first());
+          flds_dom_rename(o_prod.second().second(), src_flds, copied_flds);
+          m_odi_map.set(obj_id, o_prod);
+        }
+        m_obj_info_env.set(obj_id, object_domain_impl::object_info(
+                                       // No references owned by the object
+                                       (*obj_info_ref).refcount_val(),
+                                       (*obj_info_ref).iscopied_val(),
+                                       // Cache is not used
+                                       boolean_value::get_false(),
+                                       // Cache is not dirty
+                                       boolean_value::get_false()));
+      } else { // default setting
+        // initialize information for an abstract object for object
+        m_obj_info_env.set(obj_id, object_domain_impl::object_info(
+                                       // No references owned by the object
+                                       small_range::zero(),
+                                       // Not copied by one object
+                                       boolean_value::get_false(),
+                                       // Cache is not used
+                                       boolean_value::get_false(),
+                                       // Cache is not dirty
+                                       boolean_value::get_false()));
+      }
+
       // No need to update odi map
       // because top for an abstract object in seperate domain means not exist
     } else if (name == "do_reduction") {
