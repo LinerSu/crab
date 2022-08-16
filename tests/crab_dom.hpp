@@ -18,6 +18,7 @@
 #include <crab/domains/lookahead_widening_domain.hpp>
 #include <crab/domains/powerset_domain.hpp>
 #include <crab/domains/region_domain.hpp>
+#include <crab/domains/robust_tvpi_domain.hpp>
 #include <crab/domains/sign_domain.hpp>
 #include <crab/domains/sign_constant_domain.hpp>
 #include <crab/domains/sparse_dbm.hpp>
@@ -67,7 +68,8 @@ using z_term_dis_int_t =
 using z_num_domain_t =
     reduced_numerical_domain_product2<z_term_dis_int_t, z_sdbm_domain_t>;
 //using z_fixed_tvpi_domain_t = fixed_tvpi_domain<z_soct_domain_t>;
-using z_fixed_tvpi_domain_t = fixed_tvpi_domain<z_sdbm_domain_t>;  
+using z_fixed_tvpi_domain_t = fixed_tvpi_domain<z_sdbm_domain_t>;
+using z_robust_tvpi_domain_t = robust_tvpi_domain<z_soct_domain_t>;
 // Boolean-numerical domain over integers
 using z_bool_num_domain_t = flat_boolean_numerical_domain<z_dbm_domain_t>;
 using z_bool_interval_domain_t =
