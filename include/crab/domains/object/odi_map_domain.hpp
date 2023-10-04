@@ -53,10 +53,10 @@ private:
   using eq_domain_value_t = typename ObjectDom::eq_domain_value_t;
   using ghost_variables_eq_t = typename ObjectDom::ghost_variables_eq_t;
   using usymb_t = typename eq_domain_value_t::domain_t;
-  using base_domain_ref_t = abstract_domain_ref<typename BaseAbsDom::variable_t,
-                                              BaseAbsDom>;
-  using eq_domain_ref_t = abstract_domain_ref<typename BaseAbsDom::variable_t,
-                                              eq_domain_value_t>;
+  using base_domain_ref_t =
+      abstract_domain_ref<typename BaseAbsDom::variable_t, BaseAbsDom>;
+  using eq_domain_ref_t =
+      abstract_domain_ref<typename BaseAbsDom::variable_t, eq_domain_value_t>;
 
 public:
   // Map types
@@ -108,7 +108,7 @@ private:
   patricia_tree_t m_odi_map;
 
   // Implementation details:
-/* clang-format off */
+  /* clang-format off */
   //       ┌──────────────────────────────────────────────────┐ ╔══════════════╗
   //       │                                                  │ ║shared object:║
   //       │   ┌─────────────────┐                            │ ╚══════════════╝
@@ -141,7 +141,7 @@ private:
   //       │║shared object:║                                  │
   //       │╚══════════════╝                                  │
   //       └──────────────────────────────────────────────────┘
-/* clang-format on */
+  /* clang-format on */
 
   /// @brief A special class to compute join / widening when merging two trees
   class join_or_widening_op : public binary_op_t {
@@ -312,12 +312,11 @@ private:
         }
       }
       // After the join / widening, update the object info
-      out_val.first() =
-          odi_info_t(l_num_refs | r_num_refs,
-                     // Cache is not used
-                     boolean_value::get_false(),
-                     // Cache is not dirty
-                     boolean_value::get_false(), false, false);
+      out_val.first() = odi_info_t(l_num_refs | r_num_refs,
+                                   // Cache is not used
+                                   boolean_value::get_false(),
+                                   // Cache is not dirty
+                                   boolean_value::get_false(), false, false);
       return std::make_shared<map_raw_value_t>(out_val);
     }
 
@@ -511,10 +510,10 @@ private:
         }
       }
       out_val.first() = odi_info_t(l_num_refs & r_num_refs,
-                        // Cache is not used
-                        boolean_value::get_false(),
-                        // Cache is not dirty
-                        boolean_value::get_false(), false, false);
+                                   // Cache is not used
+                                   boolean_value::get_false(),
+                                   // Cache is not dirty
+                                   boolean_value::get_false(), false, false);
       return std::make_shared<map_raw_value_t>(out_val);
     }
 
@@ -1042,13 +1041,15 @@ public:
 
   /**------------------ Begin Cache APIs ------------------**/
   // commit cache contents into summary
-  void commit_cache(summary_domain_t &summary, cache_domain_t &cache) const {
+  void commit_cache(summary_domain_t &summary,
+                    const cache_domain_t &cache) const {
     // join summary with cache
     summary |= cache;
   }
 
   // update cache contents from summary to cache
-  void update_cache(summary_domain_t &summary, cache_domain_t &cache) const {
+  void update_cache(const summary_domain_t &summary,
+                    cache_domain_t &cache) const {
     // copy summary to cache
     cache = summary;
   }
@@ -1073,7 +1074,7 @@ public:
       key_t &key, object_domain_t &abs_state,
       ghost_variables_eq_t &&rgn_eq_gvars, boost::optional<usymb_t> &reg_symb,
       boost::optional<std::pair<usymb_t, usymb_t>> &offset_size_symb,
-      bool is_ref_mru) {
+      bool is_ref_mru, bool is_store) {
     const map_raw_value_t *obj_prod_ref = find(key);
 
     bool update_new_mru = false;
@@ -1097,8 +1098,7 @@ public:
       if (out_obj_info.refcount_val() == small_range::oneOrMore()) {
         // Step1: commit cache if the cache is dirty
         abs_state.commit_cache_if_dirty(out_prod, out_obj_info, key);
-      }
-      else if (out_obj_info.cache_reg_loaded_val()) {
+      } else if (out_obj_info.cache_reg_loaded_val()) {
         out_obj_info.cache_reg_loaded_val() = false;
         abs_state.apply_reduction_from_object_to_base(out_prod, key);
       }
@@ -1107,35 +1107,40 @@ public:
       // Step3: update address dom and object info
       update_new_mru = true;
 
-      out_obj_info = odi_info_t(
-          out_obj_info.refcount_val(),
-          // Cache is used
-          boolean_value::get_true(),
-          // Cache is not dirty
-          boolean_value::get_false(),
-          // Cache is loaded to a reg?
-          reg_symb == boost::none,
-          // Cache is stored from a reg?
-          reg_symb != boost::none);
-    } else {
-      if (reg_symb) {
+      out_obj_info = odi_info_t(out_obj_info.refcount_val(),
+                                // Cache is used
+                                boolean_value::get_true(),
+                                // Cache is not dirty
+                                boolean_value::get_false(),
+                                // Cache will be loaded to a reg?
+                                is_store == false,
+                                // Cache will be stored from a reg?
+                                is_store == true);
+    } else {          // cache is still hit, but
+      if (is_store) { // call from ref_store
+        // if cache needs to be stored from a reg1, but it used
+        // to be loaded by a reg2, without loosing precision and remain
+        // soundness perform reduction from object to base and then update the
+        // cache.
         if (out_obj_info.cache_reg_loaded_val()) {
           out_obj_info.cache_reg_loaded_val() = false;
           abs_state.apply_reduction_from_object_to_base(out_prod, key);
         }
-      } else {
+      } else { // call from ref_load
+        // if cache needs to be loaded by a reg1, but it used to be stored
+        // from a reg2, perform reduction from base to object
         if (out_obj_info.cache_reg_stored_val()) {
           out_obj_info.cache_reg_stored_val() = false;
           abs_state.apply_reduction_from_base_to_object(out_prod, key);
         }
       }
-      out_obj_info.cache_reg_loaded_val() = reg_symb == boost::none;
-      out_obj_info.cache_reg_stored_val() = reg_symb != boost::none;
+      out_obj_info.cache_reg_loaded_val() = is_store == false;
+      out_obj_info.cache_reg_stored_val() = is_store == true;
     }
     // Step4: update field == reg, the equality represents either:
     //        reg := load_ref(ref, field), or
     //        store_ref(ref, field, reg)
-    if (reg_symb == boost::none) { // it means load_ref
+    if (!is_store) { // it means caller is from load_ref
       // assigning the same symbol as rgn
       reg_symb =
           abs_state.get_or_insert_symbol(*eq_flds_dom, rgn_eq_gvars.get_var());

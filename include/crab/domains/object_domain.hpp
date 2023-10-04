@@ -978,10 +978,13 @@ private:
   /// @param reg_symb optional symbolic variable representing equality between
   ///   register and field
   /// @param offset_size_symb optional symbolic variable for ghost variable
+  /// @param is_store \c true from transfer function on ref_store, \c false from
+  /// ref_load
   void invalidate_cache_if_miss(
       obj_id_t &id, const variable_t &ref, const variable_t &rgn,
       boost::optional<usymb_t> &reg_symb,
-      boost::optional<std::pair<usymb_t, usymb_t>> &offset_size_symb) {
+      boost::optional<std::pair<usymb_t, usymb_t>> &offset_size_symb,
+      bool is_store) {
 
     // get the variable represented the mru base address
     variable_t mru_obj_base = get_or_insert_base_addr(id);
@@ -996,7 +999,7 @@ private:
 
     bool update_new_mru = m_odi_map.invalidate_cache_if_miss(
         id, *this, get_or_insert_eq_gvars(rgn), reg_symb, offset_size_symb,
-        test_two_addrs_equality(id, ref));
+        test_two_addrs_equality(id, ref), is_store);
 
     // update address dom and object info if cache is missed
     if (update_new_mru) {
@@ -1954,7 +1957,7 @@ public:
         boost::optional<std::pair<usymb_t, usymb_t>> reg_offset_size_symb =
             boost::none;
         invalidate_cache_if_miss((*id_opt), ref, rgn, reg_symb,
-                                 reg_offset_size_symb);
+                                 reg_offset_size_symb, false);
         // assigning register with symbolic variable
         boost::optional<ghost_variables_eq_t> res_eq_gvars = get_eq_gvars(res);
         m_eq_regs_dom.set(res_eq_gvars.value().get_var(), *reg_symb);
@@ -2087,7 +2090,7 @@ public:
           }
         }
         invalidate_cache_if_miss((*id_opt), ref, rgn, reg_symb,
-                                 reg_offset_size_symb);
+                                 reg_offset_size_symb, true);
         // retrieve an abstract object odi again since cache may be flushed
         prod_ref = m_odi_map.find((*id_opt));
         object_value_t out_prod = odi_map_t::object_odi_val(*prod_ref);
