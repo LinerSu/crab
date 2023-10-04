@@ -71,7 +71,6 @@ template <class SYMBVAR> SYMBVAR make_fresh_var_symbol() {
 /// @tparam Domain the type of equality domain
 template <class Domain> class equivalence_class {
 private:
-  std::size_t m_size;
   std::shared_ptr<Domain> m_val;
 
   // Copy-on-write: call always this function before get_absval() if
@@ -80,11 +79,7 @@ private:
 
 public:
   explicit equivalence_class(std::shared_ptr<Domain> val)
-      : m_size(0), m_val(val) {} // avoid copy initilization
-
-  std::size_t &get_size() { return m_size; }
-
-  std::size_t get_size() const { return m_size; }
+      : m_val(val) {} // avoid copy initilization
 
   std::shared_ptr<Domain> detach_and_get_absval() {
     if (m_val.use_count() > 1) {
@@ -202,6 +197,14 @@ private:
     m_classes.clear();
   }
 
+  void __try_make_set_by_raw_val(const element_t &v, var_id_t &id) {
+    if (!contains(v)) {
+      std::shared_ptr<domain_t> absval_ptr = std::make_shared<domain_t>(id);
+      make_set(v, absval_ptr);
+      id++;
+    }
+  }
+
   /// @brief Build a map from representative to a ordered set with all the
   /// elements in the equivalence class.
   /// @return a map computed as brief described.
@@ -276,6 +279,8 @@ private:
                          const this_domain_t &right) const {
     this_domain_t res;
     var_id_t current_id = 0;
+    CRAB_LOG("symb-var-eq-join", crab::outs() << "Join "; left.dump();
+             crab::outs() << " and "; right.dump(););
     // res.dump(); 
     for (auto it = left.m_parents.begin(); it != left.m_parents.end(); it++) {
       // for each equality k == v
@@ -289,13 +294,8 @@ private:
       // check if k == v exists in another map
       if (it_k != right.m_parents.end() && it_v != right.m_parents.end() &&
           it_k->second == it_v->second) {
+        res.__try_make_set_by_raw_val(k, current_id);
         res.m_parents.insert({v, k}); // insert new pair <v, k>
-        if (!res.contains(k)) {
-          std::shared_ptr<domain_t> absval_ptr =
-              std::make_shared<domain_t>(current_id);
-          res.make_set(k, absval_ptr);
-          current_id++;
-        }
       }
       for (auto it2 = std::next(it); it2 != left.m_parents.end(); it2++) {
         // for each k2 == v2
@@ -310,17 +310,13 @@ private:
         auto it_k2 = right.m_parents.find(k2);
         if (it_k != right.m_parents.end() && it_k2 != right.m_parents.end() &&
             it_k2->second == it_k->second) {
+          res.__try_make_set_by_raw_val(k, current_id);
           res.m_parents.insert({k2, k}); // insert new pair <k2, k>
-          if (!res.contains(k)) {
-            std::shared_ptr<domain_t> absval_ptr =
-                std::make_shared<domain_t>(current_id);
-            res.make_set(k, absval_ptr);
-            current_id++;
-          }
         }
       }
     }
     res.normalize();
+    CRAB_LOG("symb-var-eq-join", res.dump(); crab::outs() << "\n");
     return res;
   }
 
@@ -341,6 +337,8 @@ private:
                      const this_domain_t &right) const {
     this_domain_t res;
     var_id_t current_id = 0;
+    CRAB_LOG("symb-var-eq-meet", crab::outs() << "Meet "; left.dump();
+             crab::outs() << " and "; right.dump(););
     for (auto it = left.m_parents.begin(); it != left.m_parents.end(); it++) {
       // for each equality k == v
       const element_t &k = it->first;
@@ -364,14 +362,9 @@ private:
         }
       }
       if (!is_k_added) {
+        res.__try_make_set_by_raw_val(v, current_id);
         // insert k and v into res map since k == v will keep
         res.m_parents.insert({k, v});
-        if (!res.contains(v)) {
-          std::shared_ptr<domain_t> absval_ptr =
-              std::make_shared<domain_t>(current_id);
-          res.make_set(v, absval_ptr);
-          current_id++;
-        }
       }
 
       // check if k does not in some class on the right state
@@ -386,7 +379,8 @@ private:
         const element_t &k3 = it3->first;
         const element_t &v3 = it3->second;
         if (v2 == v3 && k3 != k) {
-          // inside right's equivalence class including k, any variables equal to k will keep
+          // inside right's equivalence class including k, any variables equal
+          // to k will keep
           res.m_parents.insert({k3, res.m_parents.find(k)->second});
         }
       }
@@ -398,16 +392,12 @@ private:
       const element_t &k = it->first;
       const element_t &v = it->second;
       if (res.m_parents.find(k) == res.m_parents.end()) {
+        res.__try_make_set_by_raw_val(v, current_id);
         res.m_parents.insert({k, v});
-        if (!res.contains(v)) {
-          std::shared_ptr<domain_t> absval_ptr =
-              std::make_shared<domain_t>(current_id);
-          res.make_set(v, absval_ptr);
-          current_id++;
-        }
       }
     }
     res.normalize();
+    CRAB_LOG("symb-var-eq-meet", res.dump(); crab::outs() << "\n");
     return res;
   }
 
@@ -686,29 +676,36 @@ public:
       // top >= e || this >= _|_
       return false;
     }
-    // Return true if *this is a refined partitioning of o
-    //    \forall cls_x \in *this. \exists cls_y \in e ::
-    //      cls_y <= cls_x
-    equivalence_class_elems_t left_equiv_classes =
-        (*this).equiv_classes_elems();
-    equivalence_class_elems_t right_equiv_classes = e.equiv_classes_elems();
+    CRAB_LOG("symb-var-eq-leq", crab::outs() << "Inclusion test: "; dump();
+             crab::outs() << " and "; e.dump(););
+    // equals
+    // Return true if *this is a refined partitioning of e
+    //    \forall cls_y \in e. \exists cls_x \in *this ::
+    //      the set cls_y is subset of cls_x
+    // e.g. {[v3,v4]=>#var0,[v1,v2]=>#var1} \leq {[v1,v2]=>#var0}
+    //      {[v3,v4]=>#var0,[v1,v2]=>#var1} \leq {[v1,v2]=>#var0, [v5]=>#var2}
+    //      {[v3,v4]=>#var0,[v1,v2]=>#var1} \leq {[v1,v2]=>#var0, [v3]=>#var2}
+    // or alternative, \for each equality \in e, find equality \in *this
     bool res = true;
-    for (auto &right_kv : right_equiv_classes) {
-      const element_set_t &right_set = right_kv.second;
-      CRAB_LOG("symb-var-equiv-classes",
-               print_elems_vector(crab::outs(), right_set););
-      assert(right_set.size() > 0);
-      bool tmp = false;
-      for (auto &left_kv : left_equiv_classes) {
-        const element_set_t &left_set = left_kv.second;
-        CRAB_LOG("symb-var-equiv-classes",
-                 print_elems_vector(crab::outs(), left_set););
-        // subset relations implies the dual of domain operation \sqsubseteq
-        tmp |= std::includes(left_set.begin(), left_set.end(),
-                             right_set.begin(), right_set.end());
+    for (auto it = e.m_parents.begin(); it != e.m_parents.end(); it++) {
+      const element_t &k1 = it->first;
+      const element_t &v1 = it->second;
+      for (auto it2 = std::next(it); it2 != e.m_parents.end(); it2++) {
+        const element_t &k2 = it2->first;
+        const element_t &v2 = it2->second;
+        if (v1 == v2) { // k1 == k2
+          auto itk1 = m_parents.find(k1);
+          auto itk2 = m_parents.find(k2);
+          res &= (itk1 != m_parents.end() && itk2 != m_parents.end() &&
+                  itk1->second == itk2->second);
+          if (!res) {
+            break;
+          }
+        }
       }
-      res &= tmp;
     }
+    CRAB_LOG("symb-var-eq-leq", crab::outs()
+                                    << (res ? "true" : "false") << "\n");
     return res;
   }
 
@@ -908,6 +905,11 @@ public:
       CRAB_ERROR(domain_name(),
                  "::rename with input vectors of different sizes");
     }
+    CRAB_LOG("symb-var-eq", crab::outs() << "Renamimg ";
+             print_elems_vector(crab::outs(), old_elements);
+             crab::outs() << " to ";
+             print_elems_vector(crab::outs(), new_elements);
+             crab::outs() << "\n"; dump(););
     for (unsigned i = 0, size = old_elements.size(); i < size; ++i) {
       const element_t &old_v = old_elements[i];
       const element_t &new_v = new_elements[i];
@@ -925,7 +927,7 @@ public:
           parent_old_v = (*it).second;
           it = m_parents.erase(it);
         } else if ((*it).second == old_v) {
-          // find it as value
+          // find it as representative
           (*it).second = new_v;
           ++it;
         } else {
@@ -945,6 +947,7 @@ public:
         }
       }
     }
+    CRAB_LOG("symb-var-eq", crab::outs() << "After renaming "; dump(););
   }
 
   // Reduce the size of the abstract domain representation.
@@ -952,31 +955,15 @@ public:
     CRAB_ERROR(domain_name(), "::", __func__, " not implemented");
   }
 
-  /// @brief A normalization function used for other domain operations
-  /// @note  perform normalization to eliminate any class such as:
+  /// @brief A normalization function to produce a standard form
+  /// @note  Although our equality domain should perform normalization to
+  /// eliminate any class such as:
   ///          {v3}=>#var5
+  /// this is not we expected since equality domain is also used for
+  /// keeping equality between fields and registers. In that case, we split
+  /// equalities into two subdomains, this should not affect that implementation
   void normalize() override {
     SVEQ_DOMAIN_SCOPED_STATS(".normalize");
-
-    CRAB_LOG("symb-var-eq", crab::outs()
-                                << "Before normalization " << *this << "\n";);
-    // TODO: could implement to check each size of class instead of creating
-    // equivalence_class_elems_t map
-    equivalence_class_elems_t equiv_classes = equiv_classes_elems();
-    for (auto &kv : equiv_classes) {
-      const element_t &rep = kv.first;
-      const element_set_t &s = kv.second;
-      if (s.size() == 1) {
-        // the equivalence class only remain one element
-        m_classes.erase(rep);
-        m_parents.erase(rep);
-      }
-    }
-    if (m_classes.size() == 0) {
-      set_to_top();
-    }
-    CRAB_LOG("symb-var-eq", crab::outs()
-                                << "After normalization " << *this << "\n";);
   }
 
   void write(crab_os &o) const override {

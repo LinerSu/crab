@@ -109,6 +109,23 @@ int main(int argc, char **argv) {
     meet: {[v1,v2,v3,v5]=>#var0}
     */
     perfrom_domain_operations(dom7, dom8);
+
+    test_domain_t dom9, dom10;
+    // dom9 : {v1,v2}=>#var1, {v3,v4}=>#var3
+    // dom10 : {v1,v2}=>#var3
+    dom9.set(v1, idom1);
+    dom9.add(v1, v2);
+    dom9.set(v3, idom3);
+    dom9.add(v3, v4);
+
+    dom10.set(v1, idom3);
+    dom10.add(v1, v2);
+    /*
+    join: {[v1,v2]=>#var0}
+    dom9 <= dom10
+    meet: {[v1,v2]=>#var0,[v3,v4]=>#var1}
+    */
+    perfrom_domain_operations(dom1, dom2);
   }
 
   { // test all operations - level simple
@@ -294,8 +311,8 @@ int main(int argc, char **argv) {
   {// test operation for object domain
     value_domain_t idom1(1),idom2(2), idom3(3); // some abstract domain values
     test_domain_t dom1, dom2;
-    // dom1 : {v1, v2}=>#var1, {v3,v4}=>#var3
-    // dom2 : {v1, v2}=>#var3
+    // dom1 : {v1,v2}=>#var1, {v3,v4}=>#var3
+    // dom2 : {v1,v2}=>#var3, {v3}=>#var2
     dom1.set(v1, idom1);
     dom1.add(v1, v2);
     dom1.set(v3, idom3);
@@ -307,6 +324,22 @@ int main(int argc, char **argv) {
     join: {[v1,v2]=>#var0}
     dom1 <= dom2
     meet: {[v1,v2]=>#var0,[v3,v4]=>#var1}
+    */
+    perfrom_domain_operations(dom1, dom2);
+  }
+
+  {
+    value_domain_t idom1(1), idom2(2), idom3(3); // some abstract domain values
+    test_domain_t dom1, dom2;
+    // dom1 : {v4}=>#var3
+    // dom2 : {v3}=>#var2
+    dom1.set(v4, idom3);
+
+    dom2.set(v3, idom2);
+    /*
+    join: {}
+    dom1 <= dom2, dom2 <= dom1
+    meet: {[v4]=>#var3,[v3]=>#var2}
     */
     perfrom_domain_operations(dom1, dom2);
   }
