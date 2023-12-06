@@ -184,139 +184,60 @@ private:
       ODI_DOMAIN_SCOPED_STATS(".join");
 
       const odi_info_t &l_obj_info = l->first();
-      const odi_value_t &l_odi_val = l->second();
+      const odi_value_t &c_l_odi_val = l->second();
       const odi_info_t &r_obj_info = r->first();
-      const odi_value_t &r_odi_val = r->second();
+      const odi_value_t &c_r_odi_val = r->second();
       const small_range &l_num_refs = l_obj_info.refcount_val();
       const small_range &r_num_refs = r_obj_info.refcount_val();
+      boolean_value l_sum_presence = l_obj_info.sumpresence_val();
+      boolean_value r_sum_presence = r_obj_info.sumpresence_val();
+      const boolean_value l_is_init = l_obj_info.objinit_val();
+      const boolean_value r_is_init = r_obj_info.objinit_val();
       map_raw_value_t out_val;
-      cache_status_t status = cache_status_t::NONE;
+      const bool singleton_in_base =
+          crab_domain_params_man::get().singletons_in_base();
+
+      // NOTE: we reduce the complexity of code, constant casting is performed
+      // but there is no undefined behavior in the following implementation
+      // since we do not modify the constant object directly.
+      // The following copy is cheap since each subdomain is copy-on-write.
+      odi_value_t l_odi_val = odi_value_t(c_l_odi_val);
+      odi_value_t r_odi_val = odi_value_t(c_r_odi_val);
+
       // commit cache if dirty
-      if (l_num_refs == small_range::oneOrMore() &&
-          l_obj_info.cachedirty_val().is_true()) {
-        status = cache_status_t::LEFT_ONLY;
-      }
-      if (r_num_refs == small_range::oneOrMore() &&
-          r_obj_info.cachedirty_val().is_true()) {
-        status = status == cache_status_t::LEFT_ONLY
-                     ? cache_status_t::LEFT_AND_RIGHT
-                     : cache_status_t::RIGHT_ONLY;
+      m_left.commit_cache_if_dirty(m_l_base_dom, l_odi_val, l_obj_info, key);
+      if (l_sum_presence.is_false()) {
+        l_sum_presence = l_obj_info.cacheused_val();
       }
 
-      if (!crab_domain_params_man::get().singletons_in_base()) {
-        switch (status) {
-        case LEFT_ONLY: {
-          odi_value_t new_l_odi_val = l_odi_val;
-          m_left.commit_cache_if_dirty(m_l_base_dom, new_l_odi_val, l_obj_info,
-                                       key);
-          // pairwise join
-          out_val.second() = m_is_join ? new_l_odi_val | r_odi_val
-                                       : new_l_odi_val || r_odi_val;
-        } break;
-        case RIGHT_ONLY: {
-          odi_value_t new_r_odi_val = r_odi_val;
-          m_right.commit_cache_if_dirty(m_r_base_dom, new_r_odi_val, r_obj_info,
-                                        key);
-          // pairwise join
-          out_val.second() = m_is_join ? l_odi_val | new_r_odi_val
-                                       : l_odi_val || new_r_odi_val;
-        } break;
-        case LEFT_AND_RIGHT: {
-          odi_value_t new_l_odi_val = l_odi_val;
-          m_left.commit_cache_if_dirty(m_l_base_dom, new_l_odi_val, l_obj_info,
-                                       key);
-          odi_value_t new_r_odi_val = r_odi_val;
-          m_right.commit_cache_if_dirty(m_r_base_dom, new_r_odi_val, r_obj_info,
-                                        key);
-          // pairwise join
-          out_val.second() = m_is_join ? new_l_odi_val | new_r_odi_val
-                                       : new_l_odi_val || new_r_odi_val;
-        } break;
-        case NONE: {
-          // pairwise join
-          out_val.second() =
-              m_is_join ? l_odi_val | r_odi_val : l_odi_val || r_odi_val;
-        } break;
-        default:
-          // this is an unreachable default clause
-          CRAB_ERROR(typeid(join_or_widening_op).name(), "::", __func__,
-                     "Unhandled special enum constant!");
-          break;
-        }
-      } else {
-        // NOTE: if we keep singleton object in the base, the join operation
-        // should cover the case for singleton with non singleton
+      m_right.commit_cache_if_dirty(m_r_base_dom, r_odi_val, r_obj_info, key);
+      if (r_sum_presence.is_false()) {
+        r_sum_presence = r_obj_info.cacheused_val();
+      }
+
+      if (singleton_in_base) {
         if (l_num_refs.is_one() && r_num_refs == small_range::oneOrMore()) {
-          if (r_obj_info.cachedirty_val().is_true()) {
-            odi_value_t new_r_odi_val = r_odi_val;
-            m_right.commit_cache_if_dirty(m_r_base_dom, new_r_odi_val,
-                                          r_obj_info, key);
-            out_val.second() = join_or_widen_singleton_with_non_singleton(
-                key, m_left, new_r_odi_val);
-          } else {
-            out_val.second() = join_or_widen_singleton_with_non_singleton(
-                key, m_left, r_odi_val);
-          }
+          out_val.second() = join_or_widen_singleton_with_non_singleton(
+              key, m_left, r_odi_val);
         } else if (r_num_refs.is_one() &&
                    l_num_refs == small_range::oneOrMore()) {
-          if (l_obj_info.cachedirty_val().is_true()) {
-            odi_value_t new_l_odi_val = l_odi_val;
-            m_left.commit_cache_if_dirty(m_l_base_dom, new_l_odi_val,
-                                         l_obj_info, key);
-            out_val.second() = join_or_widen_singleton_with_non_singleton(
-                key, m_right, new_l_odi_val);
-          } else {
-            out_val.second() = join_or_widen_singleton_with_non_singleton(
-                key, m_right, l_odi_val);
-          }
-        } else {
-          switch (status) {
-          case LEFT_ONLY: {
-            odi_value_t new_l_odi_val = l_odi_val;
-            m_left.commit_cache_if_dirty(m_l_base_dom, new_l_odi_val,
-                                         l_obj_info, key);
-            // pairwise join
-            out_val.second() = m_is_join ? new_l_odi_val | r_odi_val
-                                         : new_l_odi_val || r_odi_val;
-          } break;
-          case RIGHT_ONLY: {
-            odi_value_t new_r_odi_val = r_odi_val;
-            m_right.commit_cache_if_dirty(m_r_base_dom, new_r_odi_val,
-                                          r_obj_info, key);
-            // pairwise join
-            out_val.second() = m_is_join ? l_odi_val | new_r_odi_val
-                                         : l_odi_val || new_r_odi_val;
-          } break;
-          case LEFT_AND_RIGHT: {
-            odi_value_t new_l_odi_val = l_odi_val;
-            m_left.commit_cache_if_dirty(m_l_base_dom, new_l_odi_val,
-                                         l_obj_info, key);
-            odi_value_t new_r_odi_val = r_odi_val;
-            m_right.commit_cache_if_dirty(m_r_base_dom, new_r_odi_val,
-                                          r_obj_info, key);
-            // pairwise join
-            out_val.second() = m_is_join ? new_l_odi_val | new_r_odi_val
-                                         : new_l_odi_val || new_r_odi_val;
-          } break;
-          case NONE: {
-            // pairwise join
-            out_val.second() =
-                m_is_join ? l_odi_val | r_odi_val : l_odi_val || r_odi_val;
-          } break;
-          default:
-            // this is an unreachable default clause
-            CRAB_ERROR(typeid(join_or_widening_op).name(), "::", __func__,
-                       "Unhandled special enum constant!");
-            break;
-          }
+          out_val.second() = join_or_widen_singleton_with_non_singleton(
+              key, m_right, l_odi_val);
         }
+      } else {
+        // pairwise join
+        out_val.second() =
+            m_is_join ? l_odi_val | r_odi_val : l_odi_val || r_odi_val;
       }
+
       // After the join / widening, update the object info
-      out_val.first() = odi_info_t(l_num_refs | r_num_refs,
-                                   // Cache is not used
-                                   boolean_value::get_false(),
-                                   // Cache is not dirty
-                                   boolean_value::get_false(), false, false);
+      out_val.first() =
+          odi_info_t(l_num_refs | r_num_refs, l_is_init | r_is_init,
+                     l_sum_presence | r_sum_presence,
+                     // Cache is not used
+                     boolean_value::get_false(),
+                     // Cache is not dirty
+                     boolean_value::get_false(), false, false);
       return std::make_shared<map_raw_value_t>(out_val);
     }
 
@@ -383,137 +304,59 @@ private:
     map_value_t meet_or_narrow_odi(const key_t &key, const map_value_t &l,
                                    const map_value_t &r) {
       const odi_info_t &l_obj_info = l->first();
-      const odi_value_t &l_odi_val = l->second();
+      const odi_value_t &c_l_odi_val = l->second();
       const odi_info_t &r_obj_info = r->first();
-      const odi_value_t &r_odi_val = r->second();
+      const odi_value_t &c_r_odi_val = r->second();
       const small_range &l_num_refs = l_obj_info.refcount_val();
       const small_range &r_num_refs = r_obj_info.refcount_val();
+      boolean_value l_sum_presence = l_obj_info.sumpresence_val();
+      boolean_value r_sum_presence = r_obj_info.sumpresence_val();
+      const boolean_value l_is_init = l_obj_info.objinit_val();
+      const boolean_value r_is_init = r_obj_info.objinit_val();
       map_raw_value_t out_val;
-      cache_status_t status = cache_status_t::NONE;
+      const bool singleton_in_base =
+          crab_domain_params_man::get().singletons_in_base();
+
+      // NOTE: we reduce the complexity of code, constant casting is performed
+      // but there is no undefined behavior in the following implementation
+      // since we do not modify the constant object directly.
+      // The following copy is cheap since each subdomain is copy-on-write.
+      odi_value_t l_odi_val = odi_value_t(c_l_odi_val);
+      odi_value_t r_odi_val = odi_value_t(c_r_odi_val);
+
       // commit cache if dirty
-      if (l_num_refs == small_range::oneOrMore() &&
-          l_obj_info.cachedirty_val().is_true()) {
-        status = cache_status_t::LEFT_ONLY;
+      m_left.commit_cache_if_dirty(m_l_base_dom, l_odi_val, l_obj_info, key);
+      if (l_sum_presence.is_false()) {
+        l_sum_presence = l_obj_info.cacheused_val();
       }
-      if (r_num_refs == small_range::oneOrMore() &&
-          r_obj_info.cachedirty_val().is_true()) {
-        status = status == cache_status_t::LEFT_ONLY
-                     ? cache_status_t::LEFT_AND_RIGHT
-                     : cache_status_t::RIGHT_ONLY;
+
+      m_right.commit_cache_if_dirty(m_r_base_dom, r_odi_val, r_obj_info, key);
+      if (r_sum_presence.is_false()) {
+        r_sum_presence = r_obj_info.cacheused_val();
       }
-      if (!crab_domain_params_man::get().singletons_in_base()) {
-        switch (status) {
-        case LEFT_ONLY: {
-          odi_value_t new_l_odi_val = l_odi_val;
-          m_left.commit_cache_if_dirty(m_l_base_dom, new_l_odi_val, l_obj_info,
-                                       key);
-          // pairwise meet
-          out_val.second() = m_is_meet ? new_l_odi_val & r_odi_val
-                                       : new_l_odi_val && r_odi_val;
-        } break;
-        case RIGHT_ONLY: {
-          odi_value_t new_r_odi_val = r_odi_val;
-          m_right.commit_cache_if_dirty(m_r_base_dom, new_r_odi_val, r_obj_info,
-                                        key);
-          // pairwise meet
-          out_val.second() = m_is_meet ? l_odi_val & new_r_odi_val
-                                       : l_odi_val && new_r_odi_val;
-        } break;
-        case LEFT_AND_RIGHT: {
-          odi_value_t new_l_odi_val = l_odi_val;
-          m_left.commit_cache_if_dirty(m_l_base_dom, new_l_odi_val, l_obj_info,
-                                       key);
-          odi_value_t new_r_odi_val = r_odi_val;
-          m_right.commit_cache_if_dirty(m_r_base_dom, new_r_odi_val, r_obj_info,
-                                        key);
-          // pairwise meet
-          out_val.second() = m_is_meet ? new_l_odi_val & new_r_odi_val
-                                       : new_l_odi_val && new_r_odi_val;
-        } break;
-        case NONE: {
-          // pairwise meet
-          out_val.second() =
-              m_is_meet ? l_odi_val & r_odi_val : l_odi_val && r_odi_val;
-        } break;
-        default:
-          // this is an unreachable default clause
-          CRAB_ERROR(typeid(meet_or_narrow_op).name(), "::", __func__,
-                     "Unhandled special enum constant!");
-          break;
-        }
-      } else {
-        // NOTE: if we keep singleton object in the base, the meet operation
-        // should cover the case for singleton with non singleton
+
+      if (singleton_in_base) {
         if (l_num_refs.is_one() && r_num_refs == small_range::oneOrMore()) {
-          if (r_obj_info.cachedirty_val().is_true()) {
-            odi_value_t new_r_odi_val = r_odi_val;
-            m_right.commit_cache_if_dirty(m_r_base_dom, new_r_odi_val,
-                                          r_obj_info, key);
-            meet_or_narrow_non_singleton_with_singleton(key, m_l_base_dom,
-                                                        new_r_odi_val);
-          } else {
-            meet_or_narrow_non_singleton_with_singleton(key, m_l_base_dom,
-                                                        r_odi_val);
-          }
+          meet_or_narrow_non_singleton_with_singleton(key, m_l_base_dom,
+                                                      r_odi_val);
         } else if (r_num_refs.is_one() &&
                    l_num_refs == small_range::oneOrMore()) {
-          if (l_obj_info.cachedirty_val().is_true()) {
-            odi_value_t new_l_odi_val = l_odi_val;
-            m_left.commit_cache_if_dirty(m_l_base_dom, new_l_odi_val,
-                                         l_obj_info, key);
-            meet_or_narrow_non_singleton_with_singleton(key, m_r_base_dom,
-                                                        new_l_odi_val);
-          } else {
-            meet_or_narrow_non_singleton_with_singleton(key, m_r_base_dom,
-                                                        l_odi_val);
-          }
-        } else {
-          switch (status) {
-          case LEFT_ONLY: {
-            odi_value_t new_l_odi_val = l_odi_val;
-            m_left.commit_cache_if_dirty(m_l_base_dom, new_l_odi_val,
-                                         l_obj_info, key);
-            // pairwise meet
-            out_val.second() = m_is_meet ? new_l_odi_val & r_odi_val
-                                         : new_l_odi_val && r_odi_val;
-          } break;
-          case RIGHT_ONLY: {
-            odi_value_t new_r_odi_val = r_odi_val;
-            m_right.commit_cache_if_dirty(m_r_base_dom, new_r_odi_val,
-                                          r_obj_info, key);
-            // pairwise meet
-            out_val.second() = m_is_meet ? l_odi_val & new_r_odi_val
-                                         : l_odi_val && new_r_odi_val;
-          } break;
-          case LEFT_AND_RIGHT: {
-            odi_value_t new_l_odi_val = l_odi_val;
-            m_left.commit_cache_if_dirty(m_l_base_dom, new_l_odi_val,
-                                         l_obj_info, key);
-            odi_value_t new_r_odi_val = r_odi_val;
-            m_right.commit_cache_if_dirty(m_r_base_dom, new_r_odi_val,
-                                          r_obj_info, key);
-            // pairwise meet
-            out_val.second() = m_is_meet ? new_l_odi_val & new_r_odi_val
-                                         : new_l_odi_val && new_r_odi_val;
-          } break;
-          case NONE: {
-            // pairwise meet
-            out_val.second() =
-                m_is_meet ? l_odi_val & r_odi_val : l_odi_val && r_odi_val;
-          } break;
-          default:
-            // this is an unreachable default clause
-            CRAB_ERROR(typeid(meet_or_narrow_op).name(), "::", __func__,
-                       "Unhandled special enum constant!");
-            break;
-          }
+          meet_or_narrow_non_singleton_with_singleton(key, m_r_base_dom,
+                                                      l_odi_val);
         }
+      } else {
+        // pairwise meet
+        out_val.second() =
+            m_is_meet ? l_odi_val & r_odi_val : l_odi_val && r_odi_val;
       }
-      out_val.first() = odi_info_t(l_num_refs & r_num_refs,
-                                   // Cache is not used
-                                   boolean_value::get_false(),
-                                   // Cache is not dirty
-                                   boolean_value::get_false(), false, false);
+
+      out_val.first() =
+          odi_info_t(l_num_refs & r_num_refs, l_is_init & r_is_init,
+                     l_sum_presence & r_sum_presence,
+                     // Cache is not used
+                     boolean_value::get_false(),
+                     // Cache is not dirty
+                     boolean_value::get_false(), false, false);
       return std::make_shared<map_raw_value_t>(out_val);
     }
 
@@ -1060,9 +903,17 @@ public:
     summary_domain_t &sum = odi_map_domain_t::object_sum_val(obj_val);
     cache_domain_t &cache = odi_map_domain_t::object_cache_val(obj_val);
     eq_domain_t &eq_fld = odi_map_domain_t::object_eq_val(obj_val);
+
     if (obj_info.cachedirty_val().is_true()) {
       // commit cache if the cache is dirty
-      commit_cache(sum, cache);
+      bool is_summary_absence = obj_info.sumpresence_val().is_false();
+      if (is_summary_absence) {
+        // Even if a object is not singleton, the summary is still absence
+        // if no cache flushed have occurred
+        sum = cache;
+      } else {
+        commit_cache(sum, cache);
+      }
     }
     // (2) clear cache domain
     cache.set_to_top();
@@ -1094,74 +945,83 @@ public:
     /* Cache missed condition:
         cache is empty or current reference does not refer to the mru object
     */
-    if (cache_used.is_false() || is_ref_mru == false) {
+    if (cache_used.is_false() || is_ref_mru == false) { // cache is missed
       if (out_obj_info.refcount_val() == small_range::oneOrMore()) {
         // Step1: commit cache if the cache is dirty
         abs_state.commit_cache_if_dirty(out_prod, out_obj_info, key);
-      } else if (out_obj_info.cache_reg_loaded_val()) {
-        out_obj_info.cache_reg_loaded_val() = false;
-        abs_state.apply_reduction_from_object_to_base(out_prod, key);
+        if (out_obj_info.sumpresence_val().is_false()) {
+          out_obj_info.sumpresence_val() = cache_used;
+        }
       }
       // Step2: update cache for new MRU object)
       update_cache(out_prod.first(), out_prod.second().first());
       // Step3: update address dom and object info
       update_new_mru = true;
 
-      out_obj_info = odi_info_t(out_obj_info.refcount_val(),
-                                // Cache is used
-                                boolean_value::get_true(),
-                                // Cache is not dirty
-                                boolean_value::get_false(),
-                                // Cache will be loaded to a reg?
-                                is_store == false,
-                                // Cache will be stored from a reg?
-                                is_store == true);
-    } else {          // cache is still hit, but
+      out_obj_info =
+          odi_info_t(out_obj_info.refcount_val(), out_obj_info.objinit_val(),
+                     out_obj_info.sumpresence_val(),
+                     // Cache is used
+                     boolean_value::get_true(),
+                     // Cache is not dirty
+                     boolean_value::get_false(),
+                     // Cache will be loaded to a reg?
+                     is_store == false,
+                     // Cache will be stored from a reg?
+                     is_store == true && reg_symb != boost::none);
+    } else {          // cache is still hit
       if (is_store) { // call from ref_store
         // if cache needs to be stored from a reg1, but it used
         // to be loaded by a reg2, without loosing precision and remain
         // soundness perform reduction from object to base and then update the
         // cache.
-        if (out_obj_info.cache_reg_loaded_val()) {
+        if (reg_symb == boost::none) {
           out_obj_info.cache_reg_loaded_val() = false;
           abs_state.apply_reduction_from_object_to_base(out_prod, key);
+          abs_state.apply_reduction_from_object_to_base(out_prod, key);
         }
+        // new solution, delay reduction, keep new equality for rgn_w == reg
       } else { // call from ref_load
         // if cache needs to be loaded by a reg1, but it used to be stored
         // from a reg2, perform reduction from base to object
         if (out_obj_info.cache_reg_stored_val()) {
           out_obj_info.cache_reg_stored_val() = false;
           abs_state.apply_reduction_from_base_to_object(out_prod, key);
+          abs_state.apply_reduction_from_object_to_base(out_prod, key);
         }
       }
       out_obj_info.cache_reg_loaded_val() = is_store == false;
-      out_obj_info.cache_reg_stored_val() = is_store == true;
+      out_obj_info.cache_reg_stored_val() =
+          is_store == true && reg_symb != boost::none;
     }
-    // Step4: update field == reg, the equality represents either:
-    //        reg := load_ref(ref, field), or
-    //        store_ref(ref, field, reg)
-    if (!is_store) { // it means caller is from load_ref
-      // assigning the same symbol as rgn
-      reg_symb =
-          abs_state.get_or_insert_symbol(*eq_flds_dom, rgn_eq_gvars.get_var());
-    }
-    (*eq_flds_dom).set(rgn_eq_gvars.get_var(), *reg_symb);
-    if (rgn_eq_gvars.has_offset_and_size()) {
-      if (offset_size_symb == boost::none) {
-        offset_size_symb = std::make_pair(
-            abs_state.get_or_insert_symbol(
-                *eq_flds_dom, rgn_eq_gvars.get_offset_and_size().get_offset()),
-            abs_state.get_or_insert_symbol(
-                *eq_flds_dom, rgn_eq_gvars.get_offset_and_size().get_size()));
+    if (!is_store ||
+        reg_symb != boost::none) { // only for load_ref and store_ref by reg
+      // Step4: update field == reg, the equality represents either:
+      //        reg := load_ref(ref, field), or
+      //        store_ref(ref, field, reg)
+      if (!is_store) { // it means caller is from load_ref
+        // assigning the same symbol as rgn
+        reg_symb = abs_state.get_or_insert_symbol(*eq_flds_dom,
+                                                  rgn_eq_gvars.get_var());
       }
-      (*eq_flds_dom)
-          .set(rgn_eq_gvars.get_offset_and_size().get_offset(),
-               std::get<0>(*offset_size_symb));
-      (*eq_flds_dom)
-          .set(rgn_eq_gvars.get_offset_and_size().get_size(),
-               std::get<1>(*offset_size_symb));
+      (*eq_flds_dom).set(rgn_eq_gvars.get_var(), *reg_symb);
+      if (rgn_eq_gvars.has_offset_and_size()) {
+        if (offset_size_symb == boost::none) {
+          offset_size_symb = std::make_pair(
+              abs_state.get_or_insert_symbol(
+                  *eq_flds_dom,
+                  rgn_eq_gvars.get_offset_and_size().get_offset()),
+              abs_state.get_or_insert_symbol(
+                  *eq_flds_dom, rgn_eq_gvars.get_offset_and_size().get_size()));
+        }
+        (*eq_flds_dom)
+            .set(rgn_eq_gvars.get_offset_and_size().get_offset(),
+                 std::get<0>(*offset_size_symb));
+        (*eq_flds_dom)
+            .set(rgn_eq_gvars.get_offset_and_size().get_size(),
+                 std::get<1>(*offset_size_symb));
+      }
     }
-
     // Step5: update odi map
     set(key, map_raw_value_t(std::move(out_obj_info), std::move(out_prod)));
 

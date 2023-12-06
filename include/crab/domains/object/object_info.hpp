@@ -53,8 +53,10 @@ public:
 /* This class contains any non-relational information about abstract objects */
 class object_info {
   // Simple reduced product of (SmallRange x Boolean x Boolean)
-  using product_t = basic_domain_product2<
-      small_range, basic_domain_product2<boolean_value, boolean_value>>;
+  using cache_info_t = basic_domain_product2<boolean_value, boolean_value>;
+  using status_info_t = basic_domain_product2<boolean_value, boolean_value>;
+  using object_info_t = basic_domain_product2<small_range, status_info_t>;
+  using product_t = basic_domain_product2<object_info_t, cache_info_t>;
 
   using reduction_flag_t = reduction_info;
 
@@ -64,10 +66,13 @@ class object_info {
 
 public:
   object_info() { m_product.set_to_top(); }
-  object_info(const small_range &count, const boolean_value &cache_used,
+  object_info(const small_range &count, const boolean_value &obj_init,
+              const boolean_value &no_sum, const boolean_value &cache_used,
               const boolean_value &cache_dirty, const bool &is_loaded,
               const bool &is_stored) {
     refcount_val() = count;
+    objinit_val() = obj_init;
+    sumpresence_val() = no_sum;
     cacheused_val() = cache_used;
     cachedirty_val() = cache_dirty;
     m_flags = reduction_flag_t(is_loaded, is_stored);
@@ -92,7 +97,13 @@ public:
   bool is_top() const { return m_product.is_top(); }
 
   // Number of references that may point to an object.
-  small_range &refcount_val() { return m_product.first(); }
+  small_range &refcount_val() { return m_product.first().first(); }
+  // Whether the object is inited through the store_ref
+  boolean_value &objinit_val() { return m_product.first().second().first(); }
+  // Object summary is presence.
+  boolean_value &sumpresence_val() {
+    return m_product.first().second().second();
+  }
   // Whether the cache domain is used.
   boolean_value &cacheused_val() { return m_product.second().first(); }
   // Whether the cache domain has been updated.
@@ -105,7 +116,13 @@ public:
   bool &cache_reg_stored_val() {
     return m_flags.cache_reg_stored_val();
   }
-  const small_range &refcount_val() const { return m_product.first(); }
+  const small_range &refcount_val() const { return m_product.first().first(); }
+  const boolean_value &objinit_val() const {
+    return m_product.first().second().first();
+  }
+  const boolean_value &sumpresence_val() const {
+    return m_product.first().second().second();
+  }
   const boolean_value &cacheused_val() const {
     return m_product.second().first();
   }
@@ -139,8 +156,11 @@ public:
     return object_info(m_product && other.m_product);
   }
   void write(crab::crab_os &o) const {
-    o << "RefCount=" << refcount_val() << ","
-      << "CacheUsed=" << cacheused_val() << ","
+
+    o << "RefCount=" << refcount_val() << ",";
+    CRAB_LOG("object-print", o << "ObjInit=" << objinit_val() << ","
+                               << "SumPresence=" << sumpresence_val() << ",");
+    o << "CacheUsed=" << cacheused_val() << ","
       << "CacheDirty=" << cachedirty_val() << ",";
     m_flags.write(o);
   }

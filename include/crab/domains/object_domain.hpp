@@ -13,6 +13,8 @@
 #include <crab/support/stats.hpp>
 #include <crab/types/varname_factory.hpp>
 
+#include <crab/domains/array_adaptive.hpp>
+#include <crab/domains/flat_boolean_domain.hpp>
 #include <crab/domains/object/object_info.hpp>
 #include <crab/domains/object/odi_map_domain.hpp>
 #include <crab/domains/region/ghost_variable_manager.hpp>
@@ -24,6 +26,34 @@
 namespace crab {
 namespace domains {
 namespace object_domain_impl {
+
+// FIXME: to get a bool value by a variable should be an API like entails
+// the following code is fragile if we change configuration defined in CLAM
+template <typename> struct base_is_instance_of_Flat_Boolean {
+  static constexpr int value = 0;
+};
+template <typename Dom>
+struct base_is_instance_of_Flat_Boolean<flat_boolean_numerical_domain<Dom>> {
+  static constexpr int value = 1;
+  using abstract_domain_t = flat_boolean_numerical_domain<Dom>;
+  using dom_variable_t = typename abstract_domain_t::variable_t;
+  static boolean_value get_bool_val_by_var(abstract_domain_t &abs,
+                                           const dom_variable_t &var) {
+    return abs.first().get_bool(var);
+  }
+};
+template <typename Dom>
+struct base_is_instance_of_Flat_Boolean<
+    array_adaptive_domain<flat_boolean_numerical_domain<Dom>>> {
+  static constexpr int value = 2;
+  using abstract_domain_t =
+      array_adaptive_domain<flat_boolean_numerical_domain<Dom>>;
+  using dom_variable_t = typename abstract_domain_t::variable_t;
+  static boolean_value get_bool_val_by_var(abstract_domain_t &abs,
+                                           const dom_variable_t &var) {
+    return abs.get_content_domain().get_content_domain().first().get_bool(var);
+  }
+};
 template <class Number, class VariableName, class BaseAbsDom> class Params {
 public:
   using number_t = Number;
@@ -207,15 +237,27 @@ private:
   // The map is constructed dynamically but share accress all states
   using refs_base_addrs_map_t =
       std::shared_ptr<std::unordered_map<variable_t, variable_t>>;
+  using ghost_rgn_map_t =
+      std::shared_ptr<std::unordered_map<variable_t, variable_t>>;
   /**------------------ End type definitions ------------------**/
   // FIXME: the current solution does not support different dom operations
   static_assert(
       std::is_same<base_abstract_domain_t, field_abstract_domain_t>::value,
       "base_abstract_domain_t and field_abstract_domain_t must be the same");
 
-  // static_assert(
-  //     std::is_same<eq_register_domain_t, eq_fields_domain_t>::value,
-  //     "eq_register_domain_t and eq_fields_domain_t must be the same");
+  static_assert(
+      std::is_same<typename Params::number_t,
+                   typename Params::base_abstract_domain_t::number_t>::value,
+      "Number type and BaseAbsDom::number_t must be the same");
+  // This is a strong requirement
+  static_assert(
+      std::is_same<typename Params::base_varname_t,
+                   typename Params::varname_allocator_t::varname_t>::value,
+      "BaseAbsDom::varname_t and allocator_varname_t must be the same");
+
+  static_assert(object_domain_impl::base_is_instance_of_Flat_Boolean<
+                    base_abstract_domain_t>::value > 0,
+                "base domain should be a flat boolean numerical domain");
 
   /**------------------ Begin class field definitions ------------------**/
 
@@ -252,6 +294,7 @@ private:
   // concrete memory object. In addition, each cache that used for an abstract
   // object has a special base address variable for the MRU object
   refs_base_addrs_map_t m_refs_base_addrs_map;
+  ghost_rgn_map_t m_ghost_rgn_map;
 
   // A ghost variable manager to create / get ghost variable for
   // each variable
@@ -311,12 +354,13 @@ private:
                 eq_register_domain_t &&eq_regs_dom,
                 obj_flds_id_map_t &&flds_id_map,
                 refs_base_addrs_map_t &&refs_base_addrs_map,
+                ghost_rgn_map_t &&ghost_rgn_map,
                 ghost_var_num_man_t &&ghost_var_num_man,
                 ghost_var_eq_man_t &&ghost_var_eq_man)
       : m_is_bottom(base_dom.is_bottom()), m_base_dom(base_dom),
         m_odi_map(odi_map), m_addrs_dom(addrs_dom), m_eq_regs_dom(eq_regs_dom),
         m_flds_id_map(flds_id_map), m_refs_base_addrs_map(refs_base_addrs_map),
-        m_ghost_var_num_man(ghost_var_num_man),
+        m_ghost_rgn_map(ghost_rgn_map), m_ghost_var_num_man(ghost_var_num_man),
         m_ghost_var_eq_man(ghost_var_eq_man) {}
 
   std::function<variable_type(const variable_t &)> get_type() const {
@@ -481,6 +525,10 @@ private:
       m_refs_base_addrs_map = right.m_refs_base_addrs_map;
     }
 
+    if (right.m_ghost_rgn_map && !m_ghost_rgn_map) {
+      m_ghost_rgn_map = right.m_ghost_rgn_map;
+    }
+
     /********* pairwise join *********/
     // 1. join odi maps
     // The reason to copy base dom is we need to update base domain
@@ -525,6 +573,9 @@ private:
         left.m_refs_base_addrs_map ? left.m_refs_base_addrs_map
                                    : right.m_refs_base_addrs_map;
 
+    ghost_rgn_map_t out_ghost_rgn_map =
+        left.m_ghost_rgn_map ? left.m_ghost_rgn_map : right.m_ghost_rgn_map;
+
     // 1. join odi maps
     // Copying base domains is required for flushing caches
     base_abstract_domain_t l_base_dom = left.m_base_dom;
@@ -556,7 +607,8 @@ private:
         std::move(out_base_dom), std::move(out_odi_map),
         std::move(out_addrs_dom), std::move(out_eq_regs_dom),
         std::move(out_flds_id_map), std::move(out_refs_base_addrs_map),
-        std::move(out_ghost_var_num_man), std::move(out_ghost_var_eq_man));
+        std::move(out_ghost_rgn_map), std::move(out_ghost_var_num_man),
+        std::move(out_ghost_var_eq_man));
     return res;
   }
 
@@ -638,6 +690,9 @@ private:
         left.m_refs_base_addrs_map ? left.m_refs_base_addrs_map
                                    : right.m_refs_base_addrs_map;
 
+    ghost_rgn_map_t out_ghost_rgn_map =
+        left.m_ghost_rgn_map ? left.m_ghost_rgn_map : right.m_ghost_rgn_map;
+
     // 1. meet odi maps
     // Copying base domains is required for flushing caches
     base_abstract_domain_t l_base_dom = left.m_base_dom;
@@ -669,7 +724,8 @@ private:
         std::move(out_base_dom), std::move(out_odi_map),
         std::move(out_addrs_dom), std::move(out_eq_regs_dom),
         std::move(out_flds_id_map), std::move(out_refs_base_addrs_map),
-        std::move(out_ghost_var_num_man), std::move(out_ghost_var_eq_man));
+        std::move(out_ghost_rgn_map), std::move(out_ghost_var_num_man),
+        std::move(out_ghost_var_eq_man));
     return res;
   }
 
@@ -756,12 +812,27 @@ private:
   /// @brief get all object fields by giving an id
   /// @param[in] id an object id
   /// @param[in, out] obj_flds the vector stored the result
-  /// @note this function should be distinguished with \c get_obj_flds_with_ghost
+  /// @note this function should be distinguished with \c get_raw_obj_flds
   void get_obj_flds(const obj_id_t &id, variable_vector_t &obj_flds) const {
     assert(m_flds_id_map);
     for (auto kv : (*m_flds_id_map)) {
       if (kv.second == id) {
         obj_flds.push_back(kv.first);
+      }
+    }
+  }
+
+  void get_obj_write_flds(const obj_id_t &id,
+                          variable_vector_t &shadow_flds) const {
+    variable_vector_t obj_flds;
+    get_obj_flds(id, obj_flds);
+    for (auto &v : obj_flds) {
+      if (is_unknown_region(v)) {
+        continue;
+      }
+      auto w_rgn_opt = get_write_region(v);
+      if (w_rgn_opt) {
+        shadow_flds.push_back(*w_rgn_opt);
       }
     }
   }
@@ -774,9 +845,9 @@ private:
   /// for a region with reference types
   /// e.g. In crab IR, if a region V_3:region(ref), the ghost variables are:
   ///    V_3.address, V_3.offset, V_3.size
-  /// \c get_obj_flds_with_ghost will fetch all ghost variables used by object fields
-  void get_obj_flds_with_ghost(const obj_id_t &id,
-                               base_dom_variable_vector_t &obj_dom_flds) const {
+  /// \c get_raw_obj_flds will fetch all ghost variables used by object fields
+  void get_raw_obj_flds(const obj_id_t &id,
+                        base_dom_variable_vector_t &obj_dom_flds) const {
 
     auto get_obj_ghost_flds = [&](const obj_id_t &id,
                                   ghost_variable_vector_t &obj_ghost_flds) {
@@ -798,6 +869,31 @@ private:
         obj_dom_flds.push_back(v.get_offset_and_size().get_size());
       }
       obj_dom_flds.push_back(v.get_var());
+    }
+  }
+
+  void get_raw_obj_write_flds_map(
+      const obj_id_t &id,
+      std::unordered_map<base_dom_variable_t, base_dom_variable_t> &map) const {
+    variable_vector_t obj_flds;
+    get_obj_flds(id, obj_flds);
+    // get_obj_write_flds(id, wrt_flds);
+    for (auto v : obj_flds) {
+      if (is_unknown_region(v)) {
+        continue;
+      }
+      auto w_rgn_opt = get_write_region(v);
+      if (w_rgn_opt) {
+        auto gvars_opt = get_num_gvars(v);
+        auto g_w_vars_opt = get_num_gvars(*w_rgn_opt);
+        if (gvars_opt->has_offset_and_size()) {
+          map.insert({g_w_vars_opt->get_offset_and_size().get_offset(),
+                      gvars_opt->get_offset_and_size().get_offset()});
+          map.insert({g_w_vars_opt->get_offset_and_size().get_size(),
+                      gvars_opt->get_offset_and_size().get_size()});
+        }
+        map.insert({g_w_vars_opt->get_var(), gvars_opt->get_var()});
+      }
     }
   }
 
@@ -869,6 +965,38 @@ private:
     return it->second;
   }
 
+  variable_t get_or_insert_write_region(const variable_t &rgn) {
+    assert(rgn.get_type().is_region());
+    if (!m_ghost_rgn_map) { // create a ref - base addr map if it is null
+      m_ghost_rgn_map =
+          std::make_shared<std::unordered_map<variable_t, variable_t>>();
+    }
+    auto it = (*m_ghost_rgn_map).find(rgn);
+    if (it != (*m_ghost_rgn_map).end()) {
+      return it->second;
+    }
+    varname_t rgn_var_name = rgn.name();
+    std::string str_base_name = "_write";
+    varname_t base_name = rgn_var_name.get_var_factory().get_or_insert_varname(
+        rgn_var_name, str_base_name);
+    variable_t g_rgn(base_name, rgn.get_type().get_type_kind(),
+                     rgn.get_type().get_bitwidth());
+    (*m_ghost_rgn_map).insert({rgn, g_rgn});
+    return g_rgn;
+  }
+
+  boost::optional<variable_t> get_write_region(const variable_t &rgn) const {
+    assert(rgn.get_type().is_region());
+    if (!m_ghost_rgn_map) {
+      return boost::none;
+    }
+    auto it = (*m_ghost_rgn_map).find(rgn);
+    if (it == (*m_ghost_rgn_map).end()) {
+      return boost::none;
+    }
+    return it->second;
+  }
+
   // /// @brief get the corresponding base address variable or report error
   // /// @param rgn a reference variable or an object id
   // /// @return if we find the ghost, returns; otherwise, abort with an error
@@ -914,7 +1042,7 @@ private:
   void change_object_status(const obj_id_t &id) {
 
     base_dom_variable_vector_t flds_vec;
-    get_obj_flds_with_ghost(id, flds_vec);
+    get_raw_obj_flds(id, flds_vec);
 
     const odi_domain_product_t *prod_ref = m_odi_map.find(id);
     if (!prod_ref) {
@@ -944,6 +1072,7 @@ private:
       m_is_bottom = m_base_dom.is_bottom();
       // copy singleton object into summary
       odi_map_t::object_sum_val(odi_val) = odi_map_t::object_cache_val(odi_val);
+      obj_info.sumpresence_val() = obj_info.cacheused_val();
       odi_map_t::object_eq_val(odi_val).set_to_top();
     } else {
       // TODO: performance may matter if the base dom contains huge dimensions
@@ -958,6 +1087,7 @@ private:
       for (auto &fld : flds_vec) {
         m_ghost_var_num_man.forget(fld, m_base_dom);
       }
+      obj_info.sumpresence_val() = obj_info.objinit_val();
     }
     // update odi map
     m_odi_map.set(id, std::move(res_prod));
@@ -996,9 +1126,13 @@ private:
                      << "Is mru cached? "
                      << (test_two_addrs_equality(id, ref) ? "true" : "false")
                      << "\n";);
+    ghost_variables_eq_t rgn_eq_gvars = get_or_insert_eq_gvars(rgn);
+    if (is_store && reg_symb != boost::none) {
+      rgn_eq_gvars = get_or_insert_eq_gvars(get_or_insert_write_region(rgn));
+    }
 
     bool update_new_mru = m_odi_map.invalidate_cache_if_miss(
-        id, *this, get_or_insert_eq_gvars(rgn), reg_symb, offset_size_symb,
+        id, *this, std::move(rgn_eq_gvars), reg_symb, offset_size_symb,
         test_two_addrs_equality(id, ref), is_store);
 
     // update address dom and object info if cache is missed
@@ -1072,8 +1206,6 @@ private:
       //  base_dom' = (\exists Symb (\exists flds. eq_fld_dom ^ cache_dom) ^
       //  eq_reg_dom) ^ base_dom
       const obj_id_t &id = kv.first;
-      base_dom_variable_vector_t flds_vec;
-      get_obj_flds_with_ghost(id, flds_vec);
       const odi_domain_product_t *prod_ref = m_odi_map.find(id);
       if (prod_ref) {
         const object_info_t &prod_info = odi_map_t::object_info_val(*prod_ref);
@@ -1104,8 +1236,6 @@ private:
       //  cache_dom' = (\exists Symb (\exists regs. eq_reg_dom ^ base_dom) ^
       //  eq_fld_dom) ^ cache_dom
       const obj_id_t &id = kv.first;
-      base_dom_variable_vector_t flds_vec;
-      get_obj_flds_with_ghost(id, flds_vec);
       const odi_domain_product_t *prod_ref = m_odi_map.find(id);
       if (prod_ref) {
         const object_info_t &prod_info = odi_map_t::object_info_val(*prod_ref);
@@ -1290,7 +1420,7 @@ private:
              crab::outs() << "\n";);
 
     base_dom_variable_vector_t obj_flds;
-    get_obj_flds_with_ghost(id, obj_flds);
+    get_raw_obj_flds(id, obj_flds);
     const eq_fields_domain_t &eq_flds_dom = odi_map_t::object_eq_val(prod);
     const cache_domain_t &cache_dom = odi_map_t::object_cache_val(prod);
     cache_domain_t reduced_cache =
@@ -1373,15 +1503,20 @@ private:
              m_odi_map.odi_val_write(crab::outs(), prod);
              crab::outs() << "\n";);
 
-    base_dom_variable_vector_t obj_flds;
-    get_obj_flds_with_ghost(id, obj_flds);
+    base_dom_variable_vector_t obj_flds, all_flds;
+    std::unordered_map<base_dom_variable_t, base_dom_variable_t> rgn_wrt_map;
+    get_raw_obj_flds(id, obj_flds);
+    get_raw_obj_write_flds_map(id, rgn_wrt_map);
+    all_flds = obj_flds;
+    std::transform(rgn_wrt_map.begin(), rgn_wrt_map.end(),
+                   std::back_inserter(all_flds),
+                   [](const auto &pair) { return pair.first; });
     const eq_fields_domain_t &eq_flds_dom = odi_map_t::object_eq_val(prod);
     cache_domain_t &cache_dom = odi_map_t::object_cache_val(prod);
-    variable_vector_t remained_regs;
-    variable_vector_t renamed_flds;
 
     symb_flds_regs_map_t map;
-    build_map(map, m_eq_regs_dom, eq_flds_dom, obj_flds);
+    build_map(map, m_eq_regs_dom, eq_flds_dom, all_flds);
+    base_dom_variable_vector_t shadow_flds_used, flds_to_forget;
     CRAB_LOG("object-reduce", symbol_map_write(crab::outs(), map));
 
     for (auto it = map.begin(); it != map.end(); ++it) {
@@ -1396,6 +1531,11 @@ private:
       const base_dom_variable_t &reg = regs[0];
       auto it_flds = flds.begin();
       const base_dom_variable_t &var = *it_flds;
+      auto it_map = rgn_wrt_map.find(var);
+      if (it_map != rgn_wrt_map.end()) {
+        flds_to_forget.push_back(it_map->second);
+        shadow_flds_used.push_back(it_map->first);
+      }
       while (it_flds != flds.end()) {
         if (it_flds == flds.begin()) {
           // base_dom.rename({reg}, {var});
@@ -1408,8 +1548,12 @@ private:
     }
     // FIXME: avoid copying, use efficient project onto
     base_abstract_domain_t reduced_base = base_dom;
-    reduced_base.project(obj_flds);
+    reduced_base.project(all_flds);
     *cache_dom &= reduced_base;
+    // renaming: from rgn_w to rgn
+    (*cache_dom).forget(flds_to_forget);
+    (*cache_dom).rename(shadow_flds_used, flds_to_forget);
+
     CRAB_LOG(
         "object-reduce", crab::outs() << "After Reduction:\n"
                                       << "base = " << base_dom << "\n"
@@ -1489,12 +1633,18 @@ private:
     }
   }
 
-  void dump() const { write(crab::outs()); }
   /**------------------ End helper method definitions ------------------**/
 
 public:
+  void dump() const { write(crab::outs()); }
   /**------------------ Begin domain API definitions ------------------**/
-  object_domain_t make_top() const override { return object_domain_t(true); }
+  object_domain_t make_top() const override {
+    object_domain_t top = object_domain_t(true);
+    top.m_flds_id_map = m_flds_id_map;
+    top.m_refs_base_addrs_map = m_refs_base_addrs_map;
+    top.m_ghost_rgn_map = m_ghost_rgn_map;
+    return top;
+  }
 
   object_domain_t make_bottom() const override {
     return object_domain_t(false);
@@ -1502,6 +1652,9 @@ public:
 
   void set_to_top() override {
     object_domain_t abs(true);
+    abs.m_flds_id_map = m_flds_id_map;
+    abs.m_refs_base_addrs_map = m_refs_base_addrs_map;
+    abs.m_ghost_rgn_map = m_ghost_rgn_map;
     std::swap(*this, abs);
   }
 
@@ -1519,6 +1672,7 @@ public:
         m_odi_map(o.m_odi_map), m_addrs_dom(o.m_addrs_dom),
         m_eq_regs_dom(o.m_eq_regs_dom), m_flds_id_map(o.m_flds_id_map),
         m_refs_base_addrs_map(o.m_refs_base_addrs_map),
+        m_ghost_rgn_map(o.m_ghost_rgn_map),
         m_ghost_var_num_man(o.m_ghost_var_num_man),
         m_ghost_var_eq_man(o.m_ghost_var_eq_man) {
     OBJECT_DOMAIN_SCOPED_STATS(".copy");
@@ -1531,6 +1685,7 @@ public:
         m_eq_regs_dom(std::move(o.m_eq_regs_dom)),
         m_flds_id_map(std::move(o.m_flds_id_map)),
         m_refs_base_addrs_map(std::move(o.m_refs_base_addrs_map)),
+        m_ghost_rgn_map(std::move(o.m_ghost_rgn_map)),
         m_ghost_var_num_man(std::move(o.m_ghost_var_num_man)),
         m_ghost_var_eq_man(std::move(o.m_ghost_var_eq_man)) {
     OBJECT_DOMAIN_SCOPED_STATS(".move");
@@ -1546,6 +1701,7 @@ public:
       m_eq_regs_dom = o.m_eq_regs_dom;
       m_flds_id_map = o.m_flds_id_map;
       m_refs_base_addrs_map = o.m_refs_base_addrs_map;
+      m_ghost_rgn_map = o.m_ghost_rgn_map;
       m_ghost_var_num_man = o.m_ghost_var_num_man;
       m_ghost_var_eq_man = o.m_ghost_var_eq_man;
     }
@@ -1562,6 +1718,7 @@ public:
       m_eq_regs_dom = std::move(o.m_eq_regs_dom);
       m_flds_id_map = std::move(o.m_flds_id_map);
       m_refs_base_addrs_map = std::move(o.m_refs_base_addrs_map);
+      m_ghost_rgn_map = std::move(o.m_ghost_rgn_map);
       m_ghost_var_num_man = std::move(o.m_ghost_var_num_man);
       m_ghost_var_eq_man = std::move(o.m_ghost_var_eq_man);
     };
@@ -1771,6 +1928,10 @@ public:
     object_info_t obj_info = object_info_t(
         // No references owned by the object
         small_range::zero(),
+        // Object is not inited
+        boolean_value::get_false(),
+        // Summary is not presence
+        boolean_value::get_false(),
         // Cache is not used
         boolean_value::get_false(),
         // Cache is not dirty
@@ -2042,7 +2203,7 @@ public:
       // retrieve an abstract object info
       const object_info_t &obj_info_ref = odi_map_t::object_info_val(*prod_ref);
 
-      small_range num_refs = obj_info_ref.refcount_val();
+      const small_range num_refs = obj_info_ref.refcount_val();
       assert(!num_refs.is_zero());
 
       if (num_refs.is_one() && /*a flag to keep singleton in the base domain*/
@@ -2069,6 +2230,15 @@ public:
           } else if (rgn_gvars.has_offset_and_size()) {
             rgn_gvars.get_offset_and_size().forget(m_base_dom);
           }
+        }
+        if (obj_info_ref.objinit_val().is_false()) {
+          object_info_t out_obj_info = obj_info_ref;
+          out_obj_info.objinit_val() =
+              boolean_value::get_true(); /*Object is inited*/
+          // update odi map
+          m_odi_map.set(*id_opt,
+                        odi_domain_product_t(std::move(out_obj_info),
+                                             std::move(object_value_t())));
         }
       } else { // use odi map
         // keep the equality between rgn == val as a memory store
@@ -2106,8 +2276,9 @@ public:
             flds_dom.assign(rgn_gvars.get_offset_and_size().get_size(),
                             number_t(0));
           }
-          // forget region rgn in the equality field domain
-          m_ghost_var_eq_man.forget(rgn, *eq_flds_dom);
+          // forget the write region rgn_w in the equality field domain
+          variable_t rgn_w = get_or_insert_write_region(rgn);
+          m_ghost_var_eq_man.forget(rgn_w, *eq_flds_dom);
         } else { // val is a variable (i.e. register)
           ghost_variables_t val_gvars = get_or_insert_gvars(val.get_variable());
           boost::optional<ghost_variables_eq_t> val_eq_gvars =
@@ -2123,11 +2294,14 @@ public:
                 std::get<1>(*reg_offset_size_symb));
           }
           // forget old property for region rgn
-          rgn_gvars.forget(*flds_dom);
+          // new solution do not forget until reduction
+          // rgn_gvars.forget(*flds_dom);
         }
         // update object info
         object_info_t out_obj_info = object_info_t(
-            num_refs, boolean_value::get_true() /*Cache is used*/,
+            num_refs, boolean_value::get_true() /*Object is inited*/,
+            out_info.sumpresence_val(),
+            boolean_value::get_true() /*Cache is used*/,
             boolean_value::get_true() /*Cache is dirty*/,
             out_info.cache_reg_loaded_val(), out_info.cache_reg_stored_val());
         // update odi map
@@ -2411,16 +2585,19 @@ public:
       // treat region as a field, as well as an object id
       update_fields_id_map(dst_rgn, id);
       // initialize information for an abstract object for object
-      m_odi_map.set(
-          id, odi_domain_product_t(object_info_t(
-                                       // No references owned by the object
-                                       small_range::zero(),
-                                       // Cache is not used
-                                       boolean_value::get_false(),
-                                       // Cache is not dirty
-                                       boolean_value::get_false(),
-                                       false, false),
-                                   object_value_t()));
+      m_odi_map.set(id, odi_domain_product_t(
+                            object_info_t(
+                                // No references owned by the object
+                                small_range::zero(),
+                                // Object is not inited
+                                boolean_value::get_false(),
+                                // Summary is not presence
+                                boolean_value::get_false(),
+                                // Cache is not used
+                                boolean_value::get_false(),
+                                // Cache is not dirty
+                                boolean_value::get_false(), false, false),
+                            object_value_t()));
     }
 
     CRAB_LOG("object", crab::outs()
@@ -2443,6 +2620,22 @@ public:
                   const variable_or_constant_t &ref2,
                   const boost::optional<variable_t> &rgn2) override {
     OBJECT_DOMAIN_SCOPED_STATS(".select_ref");
+
+    auto compute_lhs_ref = [&lhs_ref, &lhs_rgn](
+                               const variable_or_constant_t &ref,
+                               const boost::optional<base_dom_variable_t> &rgn,
+                               object_domain_t &out) {
+      if (ref.is_reference_null()) {
+        out -= lhs_ref;
+        out.ref_assume(reference_constraint_t::mk_null(lhs_ref));
+      } else {
+        assert(ref.is_variable());
+        assert(rgn);
+        linear_expression_t zero_offset(number_t(0));
+        out.ref_gep(ref.get_variable(), *rgn, lhs_ref, lhs_rgn, zero_offset);
+      }
+    };
+
     if (!is_bottom()) {
       // REDUCTION: perform reduction
       apply_reduction_based_on_flags();
@@ -2460,9 +2653,25 @@ public:
           rename_variable_optional(rgn1);
       boost::optional<base_dom_variable_t> b_rgn2 =
           rename_variable_optional(rgn2);
-
-      m_base_dom.select_ref(lhs_ref_gvars.get_var(), lhs_b_rgn, cond, b_ref1,
-                            b_rgn1, b_ref2, b_rgn2);
+      // for address domain, we check boolean value of cond.
+      // if it is determined, we insert alias information on m_addrs_dom.
+      // NOTE: the following operations assume m_base_dom is using
+      // flat_bool_domain
+      boolean_value cond_val =
+          object_domain_impl::base_is_instance_of_Flat_Boolean<
+              base_abstract_domain_t>::get_bool_val_by_var(m_base_dom,
+                                                           cond_gvars
+                                                               .get_var());
+      if (cond_val.is_true()) {
+        compute_lhs_ref(ref1, rgn1, *this);
+      } else if (cond_val.is_false()) {
+        compute_lhs_ref(ref2, rgn2, *this);
+      } else {
+        object_domain_t inv1(*this);
+        compute_lhs_ref(ref1, rgn1, *this);
+        compute_lhs_ref(ref2, rgn2, inv1);
+        *this |= inv1;
+      }
     }
   }
 
@@ -3236,7 +3445,11 @@ public:
     }
 
     // REDUCTION: perform reduction
-    apply_reduction_based_on_flags();
+    if (name == "is_dereferenceable") {
+      apply_reduction_based_on_flags(true);
+    } else {
+      apply_reduction_based_on_flags();
+    }
 
     if (name == "regions_from_memory_object") {
       // pass region varaibles into object field map
@@ -3347,6 +3560,7 @@ public:
         // reset cache
         obj_info.cacheused_val() = boolean_value::get_false();
         obj_info.cachedirty_val() = boolean_value::get_false();
+        obj_info.sumpresence_val() = boolean_value::get_true();
         m_odi_map.set(id, odi_domain_product_t(std::move(obj_info),
                                                std::move(obj_value)));
       }
