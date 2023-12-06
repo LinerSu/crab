@@ -3675,6 +3675,10 @@ public:
 
     object_domain_t callee_at_exit(callee_dom);
 
+    if (callee_at_exit.is_top()) {
+      callee_at_exit = make_top();
+    }
+
     const variable_vector_t &caller_in_params = callsite.get_caller_in_params();
     const variable_vector_t &callee_in_params = callsite.get_callee_in_params();
     const variable_vector_t &caller_out_params =
@@ -3773,7 +3777,7 @@ public:
     for (unsigned i = 0, len = caller_lhs_cls.size(); i < len; ++i) {
       const equiv_class_regions_t &lhs_rgns = caller_lhs_cls[i];
       const equiv_class_regions_t &ret_rgns = callee_ret_cls[i];
-      copy_object(ret_rgns, lhs_rgns, callee_dom, *this);
+      copy_object(ret_rgns, lhs_rgns, callee_at_exit, *this);
     }
 
     // unify in objects in case (3)
@@ -3781,7 +3785,7 @@ public:
       if (cls_check[i]) {
         const equiv_class_regions_t &formal_rgns = callee_formal_cls[i];
         const equiv_class_regions_t &actual_rgns = caller_actual_cls[i];
-        copy_object(formal_rgns, actual_rgns, callee_dom, *this);
+        copy_object(formal_rgns, actual_rgns, callee_at_exit, *this);
       }
     }
 
@@ -3835,7 +3839,7 @@ public:
   /// @return a temporary domain value which only keeps properties for object id
   base_abstract_domain_t project_singleton(const obj_id_t &id) const {
     base_dom_variable_vector_t flds_vec;
-    get_obj_flds_with_ghost(id, flds_vec);
+    get_raw_obj_flds(id, flds_vec);
 
     base_abstract_domain_t singleton_base(m_base_dom);
     singleton_base.project(flds_vec);
