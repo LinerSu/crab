@@ -1686,13 +1686,13 @@ public:
       return *this;
     }
 
-    CRAB_LOG("object", crab::outs()
-                           << "Widening " << *this << " and " << o << " =\n");
+    CRAB_LOG("object-widen",
+             crab::outs() << "Widening " << *this << " and " << o << " =\n");
 
     object_domain_t res(
         std::move(join_or_widening(*this, o, false /*is widen*/)));
 
-    CRAB_LOG("object", crab::outs() << res << "\n");
+    CRAB_LOG("object-widen", crab::outs() << res << "\n");
     return res;
   }
 
@@ -1710,13 +1710,13 @@ public:
       return *this;
     }
 
-    CRAB_LOG("object", crab::outs() << "Widening with threshold " << *this
-                                    << " and " << o << " =\n");
+    CRAB_LOG("object-widen", crab::outs() << "Widening with threshold " << *this
+                                          << " and " << o << " =\n");
 
     object_domain_t res(
         std::move(join_or_widening(*this, o, false /*is widen*/)));
 
-    CRAB_LOG("object", crab::outs() << res << "\n");
+    CRAB_LOG("object-widen", crab::outs() << res << "\n");
     return res;
   }
 
@@ -1729,13 +1729,13 @@ public:
       return o;
     }
 
-    CRAB_LOG("object", crab::outs()
-                           << "Narrowing " << *this << " and " << o << " =\n");
+    CRAB_LOG("object-narrow",
+             crab::outs() << "Narrowing " << *this << " and " << o << " =\n");
 
     object_domain_t res(
         std::move(meet_or_narrowing(*this, o, false /*is narrow*/)));
 
-    CRAB_LOG("object", crab::outs() << res << "\n");
+    CRAB_LOG("object-narrow", crab::outs() << res << "\n");
     return res;
   }
 
@@ -3421,6 +3421,16 @@ public:
     if (is_bottom()) {
       o << "_|_";
     } else if (is_top()) {
+      CRAB_LOG("object-print", o << "("
+                                 << "Flds-id map=";
+               print_flds_id_map(o); o << ",\n"
+                                       << "BaseDom=";
+               m_ghost_var_num_man.write(o, m_base_dom);
+               o << ","
+                 << "Addrs=" << m_addrs_dom;
+               o << ","
+                 << "Regs=" << m_eq_regs_dom;
+               o << ","; object_write(o); o << ")\n"; return;);
       o << "{}";
     } else {
       CRAB_LOG("object-print", o << "("
