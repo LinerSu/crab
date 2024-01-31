@@ -133,7 +133,7 @@ public:
     return m_flags.cache_reg_loaded_val();
   }
   const bool &cache_reg_stored_val() const {
-    return m_flags.cache_reg_loaded_val();
+    return m_flags.cache_reg_stored_val();
   }
 
   bool operator<=(const object_info &other) const {
