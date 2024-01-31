@@ -71,6 +71,7 @@ template <class SYMBVAR> SYMBVAR make_fresh_var_symbol() {
 /// @tparam Domain the type of equality domain
 template <class Domain> class equivalence_class {
 private:
+  using this_class_t = equivalence_class<Domain>;
   std::shared_ptr<Domain> m_val;
 
   // Copy-on-write: call always this function before get_absval() if
@@ -91,6 +92,12 @@ public:
   std::shared_ptr<const Domain> get_absval() const { return m_val; }
 
   void set_absval(std::shared_ptr<Domain> val) { m_val = val; }
+
+  bool operator==(this_class_t &o) const { return m_val == o.m_val; }
+
+  bool value_equals(this_class_t &o) const {
+    return m_val && o.m_val && *m_val == *(o.m_val);
+  }
 }; // end class equivalence_class
 
 /// @brief helper function for logging and debugging map
@@ -197,12 +204,28 @@ private:
     m_classes.clear();
   }
 
-  void __try_make_set_by_raw_val(const element_t &v, var_id_t &id) {
+  void try_make_set_by_raw_val(const element_t &v, domain_t absval) {
     if (!contains(v)) {
-      std::shared_ptr<domain_t> absval_ptr = std::make_shared<domain_t>(id);
+      std::shared_ptr<domain_t> absval_ptr =
+          std::make_shared<domain_t>(std::move(absval));
       make_set(v, absval_ptr);
-      id++;
     }
+  }
+
+  boost::optional<const element_t>
+  check_symb_val_exists(const std::shared_ptr<domain_t> absval_ptr) const {
+    equivalence_class_t absval_cls = equivalence_class_t(absval_ptr);
+    for (const auto &kv : m_classes) {
+      if (kv.second.value_equals(absval_cls)) {
+        return kv.first;
+      }
+    }
+    return boost::none;
+  }
+
+  static domain_t __get_fresh_symb_var() {
+    return symbolic_variable_equiality_domain_impl::make_fresh_var_symbol<
+        symbolic_variable_equiality_domain_impl::symbolic_var>();
   }
 
   /// @brief Build a map from representative to a ordered set with all the
@@ -278,7 +301,6 @@ private:
   this_domain_t join(const this_domain_t &left,
                          const this_domain_t &right) const {
     this_domain_t res;
-    var_id_t current_id = 0;
     CRAB_LOG("symb-var-eq-join", crab::outs() << "Join "; left.dump();
              crab::outs() << " and "; right.dump(););
     // res.dump(); 
@@ -294,7 +316,7 @@ private:
       // check if k == v exists in another map
       if (it_k != right.m_parents.end() && it_v != right.m_parents.end() &&
           it_k->second == it_v->second) {
-        res.__try_make_set_by_raw_val(k, current_id);
+        res.try_make_set_by_raw_val(k, this_domain_t::__get_fresh_symb_var());
         res.m_parents.insert({v, k}); // insert new pair <v, k>
       }
       for (auto it2 = std::next(it); it2 != left.m_parents.end(); it2++) {
@@ -310,7 +332,8 @@ private:
         auto it_k2 = right.m_parents.find(k2);
         if (it_k != right.m_parents.end() && it_k2 != right.m_parents.end() &&
             it_k2->second == it_k->second) {
-          res.__try_make_set_by_raw_val(k, current_id);
+          res.try_make_set_by_raw_val(k,
+                                        this_domain_t::__get_fresh_symb_var());
           res.m_parents.insert({k2, k}); // insert new pair <k2, k>
         }
       }
@@ -336,7 +359,6 @@ private:
   this_domain_t meet(const this_domain_t &left,
                      const this_domain_t &right) const {
     this_domain_t res;
-    var_id_t current_id = 0;
     CRAB_LOG("symb-var-eq-meet", crab::outs() << "Meet "; left.dump();
              crab::outs() << " and "; right.dump(););
     for (auto it = left.m_parents.begin(); it != left.m_parents.end(); it++) {
@@ -362,7 +384,7 @@ private:
         }
       }
       if (!is_k_added) {
-        res.__try_make_set_by_raw_val(v, current_id);
+        res.try_make_set_by_raw_val(v, this_domain_t::__get_fresh_symb_var());
         // insert k and v into res map since k == v will keep
         res.m_parents.insert({k, v});
       }
@@ -392,7 +414,7 @@ private:
       const element_t &k = it->first;
       const element_t &v = it->second;
       if (res.m_parents.find(k) == res.m_parents.end()) {
-        res.__try_make_set_by_raw_val(v, current_id);
+        res.try_make_set_by_raw_val(v, this_domain_t::__get_fresh_symb_var());
         res.m_parents.insert({k, v});
       }
     }
@@ -524,7 +546,11 @@ public:
         std::make_shared<domain_t>(std::move(absval));
 
     if (!contains(x)) {
-      make_set(x, absval_ptr);
+      if (auto y_opt = check_symb_val_exists(absval_ptr)) {
+        add(*y_opt, x);
+      } else {
+        make_set(x, absval_ptr);
+      }
     } else {
       // Modify the abstract state of the whole equivalence class
       element_t rep_x = find(x);
@@ -619,8 +645,7 @@ public:
       return;
     }
     if (!contains(x)) {
-      set(x, symbolic_variable_equiality_domain_impl::make_fresh_var_symbol<
-                 symbolic_variable_equiality_domain_impl::symbolic_var>());
+      set(x, this_domain_t::__get_fresh_symb_var());
     }
     if (contains(y)) {
       *this -= y;
