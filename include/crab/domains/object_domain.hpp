@@ -3456,18 +3456,28 @@ public:
       // the intrinsics is only added in clam if the object has more than one
       // region.
       assert(inputs.size() >= 1);
-      error_if_not_rgn(inputs[0]);
-      if (inputs[0].get_type().is_unknown_region()) {
+      unsigned obj_id_idx = 0;
+      for (unsigned sz = inputs.size(); obj_id_idx < sz; ++obj_id_idx) {
+        error_if_not_rgn(inputs[obj_id_idx]); // this should not happen
+        if (inputs[obj_id_idx].get_type().is_unknown_region()) {
+          continue;
+        } else {
+          break;
+        }
+      }
+      // error_if_not_rgn(inputs[0]);
+      if (obj_id_idx == inputs.size()) {
         return;
       }
-      auto obj_id_opt = get_obj_id(inputs[0].get_variable());
-      obj_id_t obj_id = obj_id_opt ? *obj_id_opt : inputs[0].get_variable();
-      for (int i = 1, sz = inputs.size(); i < sz; ++i) {
+      auto obj_id_opt = get_obj_id(inputs[obj_id_idx].get_variable());
+      obj_id_t obj_id =
+          obj_id_opt ? *obj_id_opt : inputs[obj_id_idx].get_variable();
+      for (int i = 0, sz = inputs.size(); i < sz; ++i) {
         error_if_not_rgn(inputs[i]); // this should not happen
         if (inputs[i].get_type().is_unknown_region()) {
           // get_or_insert_gvars does not support unknown regions so we bail
           // out. The base domain shouldn't care about regions anyway.
-          return;
+          continue;
         }
         // Note that, region initialization is before the intrinsic calls
         // Any obj info set up are not for object id will be removed.
@@ -3475,7 +3485,11 @@ public:
         if (old_id_opt && obj_id != *old_id_opt) {
           m_odi_map -= *old_id_opt;
           m_addrs_dom -= get_or_insert_base_addr(*old_id_opt);
+        }
           update_fields_id_map(inputs[i].get_variable(), obj_id);
+          update_fields_id_map(inputs[i].get_variable(), obj_id);
+        }
+        update_fields_id_map(inputs[i].get_variable(), obj_id);
         }
       }
       // No need to update odi map
