@@ -132,13 +132,16 @@ public:
 /// allocation-site abstraction or domain reduction. In short, giving two
 /// elements are known to hold equal values in concrete semantics if
 /// the domain captures that the elements hold equal symbolic variable.
-/// @tparam BaseDomain the type of the domain value represents the base domain in the object domain
+/// @tparam BaseDomain the type of the domain value represents the base domain
+/// in the object domain
 /// @tparam DomainParams domain parameter for inter-procedural analysis
-template <class BaseDomain, class DomainParams = SVEQDefaultParams> 
+template <class BaseDomain, class DomainParams = SVEQDefaultParams>
 class symbolic_variable_equiality_domain final
-  : public abstract_domain_api<symbolic_variable_equiality_domain<BaseDomain, DomainParams>> {
+    : public abstract_domain_api<
+          symbolic_variable_equiality_domain<BaseDomain, DomainParams>> {
 public:
-  using symb_eq_domain_t = symbolic_variable_equiality_domain<BaseDomain, DomainParams>;
+  using symb_eq_domain_t =
+      symbolic_variable_equiality_domain<BaseDomain, DomainParams>;
   using abstract_domain_t = abstract_domain_api<symb_eq_domain_t>;
 
   using typename abstract_domain_t::disjunctive_linear_constraint_system_t;
@@ -280,7 +283,8 @@ private:
         out.insert(it, kv.first);
       }
     }
-    return out; // no need std::move since Return Value Optimization (RVO) is enabled
+    return out; // no need std::move since Return Value Optimization (RVO) is
+                // enabled
   }
 
   /// @brief a helper method for domain operation join
@@ -294,16 +298,16 @@ private:
   /// equalities appeared both in left and in right states.
   /// Formally, forall cls_x \in left. forall cls_y \in right ::
   ///           cls_x ^ cls_y
-  /// 
+  ///
   /// This operation is running on Quadratic Time -- O(n^2).
   /// The computation follows the structure of unordered_map.
   /// The operation requires to construct a new unordered_map.
   this_domain_t join(const this_domain_t &left,
-                         const this_domain_t &right) const {
+                     const this_domain_t &right) const {
     this_domain_t res;
     CRAB_LOG("symb-var-eq-join", crab::outs() << "Join "; left.dump();
              crab::outs() << " and "; right.dump(););
-    // res.dump(); 
+    // res.dump();
     for (auto it = left.m_parents.begin(); it != left.m_parents.end(); it++) {
       // for each equality k == v
       const element_t &k = it->first;
@@ -332,8 +336,7 @@ private:
         auto it_k2 = right.m_parents.find(k2);
         if (it_k != right.m_parents.end() && it_k2 != right.m_parents.end() &&
             it_k2->second == it_k->second) {
-          res.try_make_set_by_raw_val(k,
-                                        this_domain_t::__get_fresh_symb_var());
+          res.try_make_set_by_raw_val(k, this_domain_t::__get_fresh_symb_var());
           res.m_parents.insert({k2, k}); // insert new pair <k2, k>
         }
       }
@@ -396,7 +399,8 @@ private:
         continue;
       }
       const element_t &v2 = it2->second;
-      for (auto it3 = right.m_parents.begin(); it3 != right.m_parents.end(); it3++) {
+      for (auto it3 = right.m_parents.begin(); it3 != right.m_parents.end();
+           it3++) {
         // for each k3 == v3
         const element_t &k3 = it3->first;
         const element_t &v3 = it3->second;
@@ -800,7 +804,9 @@ public:
     return *this;
   }
 
-  this_domain_t widening_thresholds(const this_domain_t &abs, const thresholds<number_t> &ts) const override {
+  this_domain_t
+  widening_thresholds(const this_domain_t &abs,
+                      const thresholds<number_t> &ts) const override {
     SVEQ_DOMAIN_SCOPED_STATS(".widening");
     return *this;
   }
@@ -822,7 +828,8 @@ public:
 
   /// @brief remove an element from a class
   /// @param v an element
-  /// @note  if v \in cls and v is the representative, select a new representative
+  /// @note  if v \in cls and v is the representative, select a new
+  /// representative
   ///        before removing v.
   void operator-=(const element_t &v) override {
     SVEQ_DOMAIN_SCOPED_STATS(".forget");
@@ -987,9 +994,7 @@ public:
   /// this is not we expected since equality domain is also used for
   /// keeping equality between fields and registers. In that case, we split
   /// equalities into two subdomains, this should not affect that implementation
-  void normalize() override {
-    SVEQ_DOMAIN_SCOPED_STATS(".normalize");
-  }
+  void normalize() override { SVEQ_DOMAIN_SCOPED_STATS(".normalize"); }
 
   void write(crab_os &o) const override {
     if (is_top()) {
@@ -1039,11 +1044,13 @@ public:
     CRAB_ERROR(domain_name(), "::", __func__, " not implemented");
   }
 
-  disjunctive_linear_constraint_system_t to_disjunctive_linear_constraint_system() const override {
+  disjunctive_linear_constraint_system_t
+  to_disjunctive_linear_constraint_system() const override {
     CRAB_ERROR(domain_name(), "::", __func__, " not implemented");
   }
 
-  void intrinsic(std::string name, const variable_or_constant_vector_t &inputs, const variable_vector_t &outputs) override {
+  void intrinsic(std::string name, const variable_or_constant_vector_t &inputs,
+                 const variable_vector_t &outputs) override {
     CRAB_ERROR(domain_name(), "::", __func__, " not implemented");
   }
 
@@ -1054,16 +1061,24 @@ public:
     CRAB_ERROR(domain_name(), "::", __func__, " not implemented");
   }
 
-  void callee_entry(const callsite_info<variable_t> &callsite, const this_domain_t &caller) override {
+  void callee_entry(const callsite_info<variable_t> &callsite,
+                    const this_domain_t &caller) override {
     SVEQ_DOMAIN_SCOPED_STATS(".callee_entry");
-    inter_abstract_operations<this_domain_t, DomainParams::implement_inter_transformers>::
-      callee_entry(callsite, caller, *this);
+    inter_abstract_operations<
+        this_domain_t,
+        DomainParams::implement_inter_transformers>::callee_entry(callsite,
+                                                                  caller,
+                                                                  *this);
   }
 
-  void caller_continuation(const callsite_info<variable_t> &callsite, const this_domain_t &callee) override {
+  void caller_continuation(const callsite_info<variable_t> &callsite,
+                           const this_domain_t &callee) override {
     SVEQ_DOMAIN_SCOPED_STATS(".caller_cont");
-    inter_abstract_operations<this_domain_t, DomainParams::implement_inter_transformers>::
-      callee_entry(callsite, callee, *this);
+    inter_abstract_operations<
+        this_domain_t,
+        DomainParams::implement_inter_transformers>::callee_entry(callsite,
+                                                                  callee,
+                                                                  *this);
   }
   /**------------------ End domain APIs ------------------**/
   // WARN: a special function to check equivalence classes over two domain
@@ -1082,7 +1097,8 @@ public:
 };
 
 template <typename BaseDomain, typename DomainParams>
-struct abstract_domain_traits<symbolic_variable_equiality_domain<BaseDomain, DomainParams>> {
+struct abstract_domain_traits<
+    symbolic_variable_equiality_domain<BaseDomain, DomainParams>> {
   using number_t = typename BaseDomain::number_t;
   using varname_t = typename BaseDomain::varname_t;
 };

@@ -310,7 +310,7 @@ private:
   ghost_var_num_man_t m_ghost_var_num_man;
   ghost_var_eq_man_t m_ghost_var_eq_man;
 
-/* clang-format off */
+  /* clang-format off */
   // Domain hierarchy:
   //                      m_base_dom:                       m_addrs_dom:
   //                     ┌─────────────────────────────┐
@@ -335,7 +335,7 @@ private:
   // │summary:                         │  │summary:                        │
   // │  numerical properties for Rgns  │  │  numerical properties for Rgns |
   // └─────────────────────────────────┘  └────────────────────────────────┘
-/* clang-format on */
+  /* clang-format on */
   // In addition, we specify alternative for improvement of precision
   // Enabling a flag object.singletons_in_base=true
   // The domain will keep all singleton objects in base domain,
@@ -438,11 +438,14 @@ private:
     }
   }
 
-  /// @brief performs the join operation between current abstract state and the state \p right passed by
-  /// @param[in] right an abstract state serves as an input for the join operation
+  /// @brief performs the join operation between current abstract state and the
+  /// state \p right passed by
+  /// @param[in] right an abstract state serves as an input for the join
+  /// operation
   /// @note Perform *this = join(*this, right)
   /// @pre \p this, \p right are two different abstract states
-  /// @post the new \p this satisfies: \gamma(the new \p this) \leq^{concrete} \gamma(join( \p this, \p right ))
+  /// @post the new \p this satisfies: \gamma(the new \p this) \leq^{concrete}
+  /// \gamma(join( \p this, \p right ))
   void self_join(const object_domain_t &right) {
 
     // The join operation performs as follows:
@@ -504,11 +507,10 @@ private:
     // Overall, for both cases, the only second case requires move singleton
     // into odi map. Other cases require pairwise join on each subdomain
 
-    // The DSA node info is passing via a specific intrinsic at the begining statement
-    // from each function definition in the crab IR.
-    // If there is any missing DSA information, we update it by merging two maps
-    // Ideally, DSA information should be static, but here, we gradually obtain
-    // information.
+    // The DSA node info is passing via a specific intrinsic at the begining
+    // statement from each function definition in the crab IR. If there is any
+    // missing DSA information, we update it by merging two maps Ideally, DSA
+    // information should be static, but here, we gradually obtain information.
 
     if (!m_flds_id_map) {
       m_flds_id_map = right.m_flds_id_map;
@@ -544,7 +546,7 @@ private:
     // The reason to copy base dom is we need to update base domain
     // if cache is committed. We perform a domain reduction between
     // base domain and cache subdomain in the odi map before cache invalidation.
-    // TODO: avoid copying this at first, check cache invalidation, 
+    // TODO: avoid copying this at first, check cache invalidation,
     // return new computed states if domain reduction is performed
     apply_reduction_based_on_flags(true);
     auto r_opt = right.cow_apply_reduction();
@@ -563,13 +565,17 @@ private:
     m_eq_regs_dom |= new_right.m_eq_regs_dom;
   }
 
-  /// @brief performs the join / widen operation between two abstract state passed by references
-  /// @param[in] left an abstract state serves as an input for the join operation
-  /// @param[in] right an abstract state serves as an input for the join operation
+  /// @brief performs the join / widen operation between two abstract state
+  /// passed by references
+  /// @param[in] left an abstract state serves as an input for the join
+  /// operation
+  /// @param[in] right an abstract state serves as an input for the join
+  /// operation
   /// @param[in] is_join true for join operation; false for widening
   /// @return the new abstract state computed by \p left and \p right
   /// @pre \p left, \p right are two different abstract states
-  /// @post \p \return satisfies: \gamma( \p \return ) \leq^{concrete} \gamma(join( \p left, \p right ))
+  /// @post \p \return satisfies: \gamma( \p \return ) \leq^{concrete}
+  /// \gamma(join( \p left, \p right ))
   object_domain_t join_or_widening(const object_domain_t &left,
                                    const object_domain_t &right,
                                    const bool is_join) const {
@@ -642,13 +648,16 @@ private:
   }
 
   /// @brief meet / narrowing two abstract states, return a new state
-  /// @param[in] left an abstract state serves as an input for the meet operation
-  /// @param[in] right an abstract state serves as an input for the meet operation
+  /// @param[in] left an abstract state serves as an input for the meet
+  /// operation
+  /// @param[in] right an abstract state serves as an input for the meet
+  /// operation
   /// @param[in] is_meet true for meet operation; false for narrowing
   /// @return the new abstract state computed by \p left and \p right
   /// @pre \p left, \p right are two different abstract states
-  /// @post \p \return satisfies: 
-  /// \meet^{concrete}(\gamma( \p left ), \gamma( \p right )) \leq^{concrete} \gamma( \p \return )
+  /// @post \p \return satisfies:
+  /// \meet^{concrete}(\gamma( \p left ), \gamma( \p right )) \leq^{concrete}
+  /// \gamma( \p \return )
   object_domain_t meet_or_narrowing(const object_domain_t &left,
                                     const object_domain_t &right,
                                     const bool is_meet) const {
@@ -818,7 +827,8 @@ private:
 
   /// @brief get the corresponding object id or report error
   /// @param[in] rgn a region variable
-  /// @return if we find object id, returns; otherwise, abort execution with an error
+  /// @return if we find object id, returns; otherwise, abort execution with an
+  /// error
   obj_id_t get_obj_id_or_fail(const variable_t &rgn) const {
     if (!m_flds_id_map) {
       CRAB_ERROR(domain_name(), "::", __func__, ", the odi map does not exist");
@@ -838,7 +848,8 @@ private:
   /// @param[in] v a field from a new object
   /// @return either creating a shadow variable to represent id or use passed
   /// field.
-  /// @note this function will only be used when interpreter analyzes crab dsa intrinsic
+  /// @note this function will only be used when interpreter analyzes crab dsa
+  /// intrinsic
   obj_id_t create_new_obj_id(const variable_t &v) {
 #ifdef CREATE_NEW_ID_NAME
     varname_t v_var_name = v.name();
@@ -941,8 +952,8 @@ private:
     }
   }
 
-  /// @brief based on each dsa intrinsic in the crab IR, group region variables as
-  /// fields for each abstract object
+  /// @brief based on each dsa intrinsic in the crab IR, group region variables
+  /// as fields for each abstract object
   /// @note abstract object \equiv dsa node
   ///       region variables used in one dsa node \equiv object fields
   /// @param rgn the region belongs to one abstract object
@@ -1076,13 +1087,14 @@ private:
 
   /***************** ODI map operations *****************/
   /// @brief change singleton object to non-singleton
-  /// @pre based on number of references in object_info, the abstract object now becomes a non-singleton object
+  /// @pre based on number of references in object_info, the abstract object now
+  /// becomes a non-singleton object
   /// @post the abstract object referred by \p id is non-singleton
   /// @param[in] id an object id
   /// @par Side Effects:
   ///   This function modifies the abstract state which invokes this function.
-  ///   Depending on whether we put properties for singleton object on the base domain,
-  ///   changing singleton obejct involves different domain operations 
+  ///   Depending on whether we put properties for singleton object on the base
+  ///   domain, changing singleton obejct involves different domain operations
   void change_object_status(const obj_id_t &id) {
 
     base_dom_variable_vector_t flds_vec;
@@ -1241,8 +1253,8 @@ private:
   }
 
   /// @brief Applying domain reduction based on compilation flags
-  /// @details a method to apply domain reduction before each transfer function by
-  /// specifying an domain parameter:
+  /// @details a method to apply domain reduction before each transfer function
+  /// by specifying an domain parameter:
   ///  object.reduction_level=FULL_REDUCTION or
   ///  object.reduction_level=REDUCTION_BEFORE_CHECK && reduce_for_assert = true
   /// @note domain reduction could be disabled if parameters:
@@ -1332,7 +1344,8 @@ private:
   /// @brief method for crab intrinsic to perform reduction for a specific
   /// object \p id
   /// @param[in] id an object id
-  /// @param[in] is_from_cache_to_base boolean flag indicates reduction direction
+  /// @param[in] is_from_cache_to_base boolean flag indicates reduction
+  /// direction
   /// @note direction is either from cache to base or from base to cache
   void apply_reduction_per_object(const obj_id_t &id,
                                   bool is_from_cache_to_base) {
@@ -1343,19 +1356,18 @@ private:
       if (num_refs.is_one() &&
           crab_domain_params_man::get()
               .singletons_in_base()) { // singleton object && object in base
-        return; // no need to perform reduction
+        return;                        // no need to perform reduction
       }
       if (is_from_cache_to_base) {
         if (prod_info.cache_reg_loaded_val()) {
           // if some registers are loaded values from this object
           // perform reduction from object to base
-          object_value_t out_prod_val =
-              odi_map_t::object_odi_val(*prod_ref);
+          object_value_t out_prod_val = odi_map_t::object_odi_val(*prod_ref);
           object_info_t out_prod_info = prod_info;
           out_prod_info.cache_reg_loaded_val() = false;
           apply_reduction_from_object_to_base(m_base_dom, out_prod_val, id);
           m_odi_map.set(id, odi_domain_product_t(std::move(out_prod_info),
-                                               std::move(out_prod_val)));
+                                                 std::move(out_prod_val)));
         }
       } else {
         if (prod_info.cache_reg_stored_val()) {
@@ -1364,10 +1376,11 @@ private:
           object_value_t out_prod_val = odi_map_t::object_odi_val(*prod_ref);
           object_info_t out_prod_info = prod_info;
           out_prod_info.cache_reg_stored_val() = false;
-          base_abstract_domain_t regs_only_base = std::move(project_onto_eq_regs(m_base_dom));
+          base_abstract_domain_t regs_only_base =
+              std::move(project_onto_eq_regs(m_base_dom));
           apply_reduction_from_base_to_object(regs_only_base, out_prod_val, id);
           m_odi_map.set(id, odi_domain_product_t(std::move(out_prod_info),
-                                                std::move(out_prod_val)));
+                                                 std::move(out_prod_val)));
         }
       }
     }
@@ -1441,14 +1454,17 @@ private:
       auto regs_opt = eq_regs_dom.get_variables(symb);
       if (regs_opt) {
         std::get<1>(it->second)
-            .insert(std::get<1>(it->second).end(), regs_opt->begin(), regs_opt->end());
+            .insert(std::get<1>(it->second).end(), regs_opt->begin(),
+                    regs_opt->end());
       }
     }
   }
 
   /// @brief Reduce equalities between registers and fields from cache to base
-  /// @param[in,out] base_dom the base domain at the abstract state invokes this function
-  /// @param[in] prod object value stores a product of <SUM dom, cache dom, EQ dom>
+  /// @param[in,out] base_dom the base domain at the abstract state invokes this
+  /// function
+  /// @param[in] prod object value stores a product of <SUM dom, cache dom, EQ
+  /// dom>
   /// @param id the object id refers \p prod in the \c m_odi_map
   void apply_reduction_from_object_to_base(base_abstract_domain_t &base_dom,
                                            const object_value_t &prod,
@@ -1457,10 +1473,10 @@ private:
     OBJECT_DOMAIN_SCOPED_STATS(".reduction");
     // The following reduction is performed the followings:
     // a. get equalities constraints from 'eq_regs_dom' and 'eq_flds_dom'
-    // b. rename a field from 'reduced_cache' to a register 
+    // b. rename a field from 'reduced_cache' to a register
     //    if there is a register with the same symbol as that field;
-    //    if there are multiple registers equal to a field, add equality constriants
-    //    into 'reduced_cache'.
+    //    if there are multiple registers equal to a field, add equality
+    //    constriants into 'reduced_cache'.
     // c. forget all fields in the 'reduced_cache'.
     // d. meet 'reduced_cache' with 'base_dom'
     // E.g.
@@ -1533,8 +1549,10 @@ private:
   }
 
   /// @brief Reduce equalities between registers and fields from base to cache
-  /// @param[in,out] base_dom the base domain at the abstract state invokes this function
-  /// @param[in,out] prod object value stores a product of <SUM dom, cache dom, EQ dom>
+  /// @param[in,out] base_dom the base domain at the abstract state invokes this
+  /// function
+  /// @param[in,out] prod object value stores a product of <SUM dom, cache dom,
+  /// EQ dom>
   /// @param[in] id the object id refers \p prod in the \c m_odi_map
   void apply_reduction_from_base_to_object(base_abstract_domain_t &base_dom,
                                            object_value_t &prod,
@@ -2028,15 +2046,15 @@ public:
                 /* identifier for the allocation site */
                 const allocation_site &as) override {
     OBJECT_DOMAIN_SCOPED_STATS(".ref_make");
-  /*  TODO: determine singleton and non-singleton is based on the number of 
-   *  interpreting ref_make for an abstract object
-   *  Thus, the following CrabIR pattern cannot be precise:
-   *  DSA_INFO(rgn1(int), rgn2(int));
-   *  make_ref(ref1, rgn1, 8);
-   *  make_ref(ref2, rgn1, 8);
-   *  store_ref(ref1, rgn1, 2);
-   *  -- Current implementation treat summary subdomain as a top.
-   */
+    /*  TODO: determine singleton and non-singleton is based on the number of
+     *  interpreting ref_make for an abstract object
+     *  Thus, the following CrabIR pattern cannot be precise:
+     *  DSA_INFO(rgn1(int), rgn2(int));
+     *  make_ref(ref1, rgn1, 8);
+     *  make_ref(ref2, rgn1, 8);
+     *  store_ref(ref1, rgn1, 2);
+     *  -- Current implementation treat summary subdomain as a top.
+     */
 
     ERROR_IF_NOT_REGION(rgn, __LINE__);
     ERROR_IF_NOT_REF(ref, __LINE__);
@@ -2529,9 +2547,9 @@ public:
       m_base_dom += lin_cst;
       m_is_bottom = m_base_dom.is_bottom();
       /*
-       * We cannot maintain any relational information between two pointers 
-       * that refer to different memory objects. Even if two pointers point to 
-       * the same memory object, we still cannot imply any relationship for 
+       * We cannot maintain any relational information between two pointers
+       * that refer to different memory objects. Even if two pointers point to
+       * the same memory object, we still cannot imply any relationship for
        * non-equality operations.
        */
       if (!m_is_bottom && ref_cst.is_equality()) {
@@ -2542,9 +2560,8 @@ public:
         m_is_bottom = m_base_dom.is_bottom();
       }
       if (!m_is_bottom && ref_cst.is_equality()) {
-        auto size_lin_csts =
-            m_ghost_var_num_man.ghosting_ref_cst_to_linear_cst(
-                ref_cst, ghost_variable_kind::SIZE);
+        auto size_lin_csts = m_ghost_var_num_man.ghosting_ref_cst_to_linear_cst(
+            ref_cst, ghost_variable_kind::SIZE);
         m_base_dom += size_lin_csts;
         m_is_bottom = m_base_dom.is_bottom();
       }
@@ -3184,7 +3201,8 @@ public:
         variable_vector_t obj_flds;
         get_obj_flds(*id_opt, obj_flds);
 
-        if (obj_flds.size() == 1) { // The region is part of an object that has only one region
+        if (obj_flds.size() ==
+            1) { // The region is part of an object that has only one region
           m_odi_map -= *id_opt;
         } else {
           // Check number of references for an abstract object
@@ -3200,8 +3218,9 @@ public:
             m_ghost_var_eq_man.forget(
                 v, odi_map_t::object_eq_raw_val(prod_value_ref));
           }
-          m_odi_map.set(*id_opt, odi_domain_product_t(std::move(prod_info_ref),
-                                                      std::move(prod_value_ref)));
+          m_odi_map.set(*id_opt,
+                        odi_domain_product_t(std::move(prod_info_ref),
+                                             std::move(prod_value_ref)));
         }
       }
     } else { // forget a non region variable
@@ -3214,7 +3233,8 @@ public:
   }
 
   /// @brief forget a set of variables
-  /// @param variables a set of program variables that their property need to be forgot
+  /// @param variables a set of program variables that their property need to be
+  /// forgot
   /// @note same functionality as \c operator-=
   void forget(const variable_vector_t &variables) override {
     OBJECT_DOMAIN_SCOPED_STATS(".forget");
@@ -3277,12 +3297,13 @@ public:
         object_info_t prod_info_ref = odi_map_t::object_info_val(*prod_ref);
         const small_range &num_refs = prod_info_ref.refcount_val();
         object_value_t prod_value_ref = odi_map_t::object_odi_val(*prod_ref);
-        if (num_refs.is_one() && crab_domain_params_man::get()
-                                    .singletons_in_base()) { // singleton object in the base
+        if (num_refs.is_one() &&
+            crab_domain_params_man::get()
+                .singletons_in_base()) { // singleton object in the base
           non_odi_vars.insert(non_odi_vars.end(), flds_to_forget.begin(),
                               flds_to_forget.end());
         } else if (obj_flds.size() !=
-                  flds_to_forget.size()) { // non-singleton object
+                   flds_to_forget.size()) { // non-singleton object
           // partially forget field(s)
           for (auto v : flds_to_forget) {
             m_ghost_var_num_man.forget(
@@ -3310,9 +3331,11 @@ public:
                                   << "After Froget:" << *this << "\n";);
   }
 
-  /// @brief projecting the dimension of the abstract state onto the scope of \p variables
+  /// @brief projecting the dimension of the abstract state onto the scope of \p
+  /// variables
   /// @param variables a set of program variables
-  /// @post After projections, the state will only keep properties w.r.t \p variables
+  /// @post After projections, the state will only keep properties w.r.t \p
+  /// variables
   void project(const variable_vector_t &variables) override {
     OBJECT_DOMAIN_SCOPED_STATS(".project");
 
@@ -3430,7 +3453,8 @@ public:
       const variable_t &old_v = from[i];
       const variable_t &new_v = to[i];
       if (old_v.get_type() != new_v.get_type()) {
-        CRAB_ERROR(domain_name(), "::", __func__, " ", old_v, " and ", new_v, " must preserve the same type");
+        CRAB_ERROR(domain_name(), "::", __func__, " ", old_v, " and ", new_v,
+                   " must preserve the same type");
       }
       if (old_v.get_type().is_region()) {
         if (auto id_opt = get_obj_id(old_v)) {
@@ -3498,7 +3522,7 @@ public:
     } else {
       if (v.get_type().is_region()) {
         CRAB_ERROR(domain_name(), "::", __func__,
-            " extracting value of a region is not supported.");
+                   " extracting value of a region is not supported.");
       }
       return m_base_dom[v];
     }
@@ -3513,7 +3537,7 @@ public:
     } else {
       if (v.get_type().is_region()) {
         CRAB_ERROR(domain_name(), "::", __func__,
-            " extracting value of a region is not supported.");
+                   " extracting value of a region is not supported.");
       }
       return m_base_dom.at(v);
     }
@@ -3910,8 +3934,8 @@ public:
           dst_rgns_no_unknown, odi_map_t::object_eq_raw_val(prod_value_ref));
     }
     if (auto src_base_addr_opt = src_dom.get_base_addr(src_id)) {
-      dst_dom.m_addrs_dom.expand(
-          *src_base_addr_opt, dst_dom.get_or_insert_base_addr(*dst_id_opt));
+      dst_dom.m_addrs_dom.expand(*src_base_addr_opt,
+                                 dst_dom.get_or_insert_base_addr(*dst_id_opt));
     }
     dst_dom.m_odi_map.set(*dst_id_opt,
                           odi_domain_product_t(std::move(prod_info_ref),
@@ -3971,14 +3995,15 @@ public:
 
       if (!(formal == actual)) {
         // following DSA analysis assumption:
-        // the region in the callee cannot be mapped to two distinct regions in the caller.
-        // This mean there is no case that callee's regions belong to a dsa node
-        // but caller's do not (picture 8 in SEADSA-SAS17 paper).
-        // For the case that a src region belonging to a dsa node but dst does not
-        // This differs from copying objects, we implemented it in region_copy.
-        // Here, we use object_copy for both src regions and dst regions belong
-        // to some dsa nodes.
-        if (rgn_in_group(formal, callee_formal_cls) && rgn_in_group(actual, caller_actual_cls)) {
+        // the region in the callee cannot be mapped to two distinct regions in
+        // the caller. This mean there is no case that callee's regions belong
+        // to a dsa node but caller's do not (picture 8 in SEADSA-SAS17 paper).
+        // For the case that a src region belonging to a dsa node but dst does
+        // not This differs from copying objects, we implemented it in
+        // region_copy. Here, we use object_copy for both src regions and dst
+        // regions belong to some dsa nodes.
+        if (rgn_in_group(formal, callee_formal_cls) &&
+            rgn_in_group(actual, caller_actual_cls)) {
           continue;
         }
         CRAB_LOG("inter-restrict", crab::outs()
@@ -4095,7 +4120,8 @@ public:
       const variable_t &out_formal = callee_out_params[i];
       const variable_t &out_actual = caller_out_params[i];
       if (!(out_formal == out_actual)) {
-        if (rgn_in_group(out_actual, caller_lhs_cls) && rgn_in_group(out_formal, callee_ret_cls)) {
+        if (rgn_in_group(out_actual, caller_lhs_cls) &&
+            rgn_in_group(out_formal, callee_ret_cls)) {
           continue;
         }
         CRAB_LOG("inter-extend", crab::outs()
@@ -4261,14 +4287,17 @@ public:
     m_is_bottom = m_base_dom.is_bottom();
   }
 
-  /// @brief a wrapper method for adpaint interface of domain reduction from odi map to base
+  /// @brief a wrapper method for adpaint interface of domain reduction from odi
+  /// map to base
   /// @param[in] prod the abstract value corresponding to object \p id
   /// @param[in] id the object id
-  void apply_reduction_from_object_to_base(const object_value_t &prod, const obj_id_t &id) {
+  void apply_reduction_from_object_to_base(const object_value_t &prod,
+                                           const obj_id_t &id) {
     apply_reduction_from_object_to_base(m_base_dom, prod, id);
   }
 
-  /// @brief a wrapper method for adpaint interface of domain reduction from base to odi map
+  /// @brief a wrapper method for adpaint interface of domain reduction from
+  /// base to odi map
   /// @param[in,out] prod the abstract value corresponding to object \p id
   /// @param[in] id the object id
   void apply_reduction_from_base_to_object(object_value_t &prod,
