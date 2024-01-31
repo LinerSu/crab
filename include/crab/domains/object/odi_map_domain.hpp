@@ -146,8 +146,8 @@ private:
   /// @brief A special class to compute join / widening when merging two trees
   class join_or_widening_op : public binary_op_t {
   private:
-    const object_domain_t &m_left;
-    const object_domain_t &m_right;
+    const odi_map_domain_t &m_l_odi_map;
+    const odi_map_domain_t &m_r_odi_map;
     base_domain_t &m_l_base_dom;
     base_domain_t &m_r_base_dom;
     bool m_is_join;
@@ -205,25 +205,26 @@ private:
       odi_value_t r_odi_val = odi_value_t(c_r_odi_val);
 
       // commit cache if dirty
-      m_left.commit_cache_if_dirty(m_l_base_dom, l_odi_val, l_obj_info, key);
+      m_l_odi_map.commit_cache_if_dirty(l_obj_info, l_odi_val);
       if (l_sum_presence.is_false()) {
         l_sum_presence = l_obj_info.cacheused_val();
       }
 
-      m_right.commit_cache_if_dirty(m_r_base_dom, r_odi_val, r_obj_info, key);
+      m_r_odi_map.commit_cache_if_dirty(r_obj_info, r_odi_val);
       if (r_sum_presence.is_false()) {
         r_sum_presence = r_obj_info.cacheused_val();
       }
 
       if (singleton_in_base) {
-        if (l_num_refs.is_one() && r_num_refs == small_range::oneOrMore()) {
-          out_val.second() = join_or_widen_singleton_with_non_singleton(
-              key, m_left, r_odi_val);
-        } else if (r_num_refs.is_one() &&
-                   l_num_refs == small_range::oneOrMore()) {
-          out_val.second() = join_or_widen_singleton_with_non_singleton(
-              key, m_right, l_odi_val);
-        }
+        CRAB_ERROR("odi map does not support singleton object in base");
+        // if (l_num_refs.is_one() && r_num_refs == small_range::oneOrMore()) {
+        //   out_val.second() = join_or_widen_singleton_with_non_singleton(
+        //       key, m_left, r_odi_val);
+        // } else if (r_num_refs.is_one() &&
+        //            l_num_refs == small_range::oneOrMore()) {
+        //   out_val.second() = join_or_widen_singleton_with_non_singleton(
+        //       key, m_right, l_odi_val);
+        // }
       } else {
         // pairwise join
         out_val.second() =
@@ -260,18 +261,19 @@ private:
     virtual bool default_is_absorbing() override { return true; }
 
   public:
-    join_or_widening_op(const object_domain_t &left,
-                        const object_domain_t &right, base_domain_t &l_base_dom,
-                        base_domain_t &r_base_dom, bool is_join)
-        : m_left(left), m_right(right), m_l_base_dom(l_base_dom),
+    join_or_widening_op(const odi_map_domain_t &left,
+                        const odi_map_domain_t &right,
+                        base_domain_t &l_base_dom, base_domain_t &r_base_dom,
+                        bool is_join)
+        : m_l_odi_map(left), m_r_odi_map(right), m_l_base_dom(l_base_dom),
           m_r_base_dom(r_base_dom), m_is_join(is_join) {}
   }; // class join_op
 
   /// @brief A special class to compute meet / narrowing when merging two trees
   class meet_or_narrow_op : public binary_op_t {
   private:
-    const object_domain_t &m_left;
-    const object_domain_t &m_right;
+    const odi_map_domain_t &m_l_odi_map;
+    const odi_map_domain_t &m_r_odi_map;
     base_domain_t &m_l_base_dom;
     base_domain_t &m_r_base_dom;
     bool m_is_meet;
@@ -325,25 +327,26 @@ private:
       odi_value_t r_odi_val = odi_value_t(c_r_odi_val);
 
       // commit cache if dirty
-      m_left.commit_cache_if_dirty(m_l_base_dom, l_odi_val, l_obj_info, key);
+      m_l_odi_map.commit_cache_if_dirty(l_obj_info, l_odi_val);
       if (l_sum_presence.is_false()) {
         l_sum_presence = l_obj_info.cacheused_val();
       }
 
-      m_right.commit_cache_if_dirty(m_r_base_dom, r_odi_val, r_obj_info, key);
+      m_r_odi_map.commit_cache_if_dirty(r_obj_info, r_odi_val);
       if (r_sum_presence.is_false()) {
         r_sum_presence = r_obj_info.cacheused_val();
       }
 
       if (singleton_in_base) {
-        if (l_num_refs.is_one() && r_num_refs == small_range::oneOrMore()) {
-          meet_or_narrow_non_singleton_with_singleton(key, m_l_base_dom,
-                                                      r_odi_val);
-        } else if (r_num_refs.is_one() &&
-                   l_num_refs == small_range::oneOrMore()) {
-          meet_or_narrow_non_singleton_with_singleton(key, m_r_base_dom,
-                                                      l_odi_val);
-        }
+        CRAB_ERROR("odi map does not support singleton object in base");
+        // if (l_num_refs.is_one() && r_num_refs == small_range::oneOrMore()) {
+        //   meet_or_narrow_non_singleton_with_singleton(key, m_l_base_dom,
+        //                                               r_odi_val);
+        // } else if (r_num_refs.is_one() &&
+        //            l_num_refs == small_range::oneOrMore()) {
+        //   meet_or_narrow_non_singleton_with_singleton(key, m_r_base_dom,
+        //                                               l_odi_val);
+        // }
       } else {
         // pairwise meet
         out_val.second() =
@@ -377,10 +380,10 @@ private:
     virtual bool default_is_absorbing() override { return false; }
 
   public:
-    meet_or_narrow_op(const object_domain_t &left, const object_domain_t &right,
-                      base_domain_t &l_base_dom, base_domain_t &r_base_dom,
-                      bool is_meet)
-        : m_left(left), m_right(right), m_l_base_dom(l_base_dom),
+    meet_or_narrow_op(const odi_map_domain_t &left,
+                      const odi_map_domain_t &right, base_domain_t &l_base_dom,
+                      base_domain_t &r_base_dom, bool is_meet)
+        : m_l_odi_map(left), m_r_odi_map(right), m_l_base_dom(l_base_dom),
           m_r_base_dom(r_base_dom), m_is_meet(is_meet) {}
   }; // class meet_or_narrow_op
 
@@ -520,8 +523,7 @@ public:
   }
 
   // Join
-  odi_map_domain_t join(const odi_map_domain_t &o, const object_domain_t &left,
-                        const object_domain_t &right, base_domain_t &l_base_dom,
+  odi_map_domain_t join(const odi_map_domain_t &o, base_domain_t &l_base_dom,
                         base_domain_t &r_base_dom) const {
     ODI_DOMAIN_SCOPED_STATS(".join");
 
@@ -534,7 +536,7 @@ public:
       abs.set_to_top();
       return abs;
     } else {
-      join_or_widening_op jop(left, right, l_base_dom, r_base_dom, true);
+      join_or_widening_op jop(*this, o, l_base_dom, r_base_dom, true);
       bool is_bottom = false /*unused*/;
       patricia_tree_t res =
           apply_operation(jop, m_odi_map, o.m_odi_map, is_bottom);
@@ -543,8 +545,7 @@ public:
   }
 
   // Self join
-  void compound_join(const odi_map_domain_t &o, const object_domain_t &left,
-                     const object_domain_t &right, base_domain_t &l_base_dom,
+  void compound_join(const odi_map_domain_t &o, base_domain_t &l_base_dom,
                      base_domain_t &r_base_dom) {
     ODI_DOMAIN_SCOPED_STATS(".join");
 
@@ -554,15 +555,14 @@ public:
     } else if (is_top() || o.is_top()) {
       set_to_top();
     } else {
-      join_or_widening_op jop(left, right, l_base_dom, r_base_dom, true);
+      join_or_widening_op jop(*this, o, l_base_dom, r_base_dom, true);
       bool is_bottom = false /*unused*/;
       apply_self_operation(jop, m_odi_map, o.m_odi_map, is_bottom);
     }
   }
 
   // Meet
-  odi_map_domain_t meet(const odi_map_domain_t &o, const object_domain_t &left,
-                        const object_domain_t &right, base_domain_t &l_base_dom,
+  odi_map_domain_t meet(const odi_map_domain_t &o, base_domain_t &l_base_dom,
                         base_domain_t &r_base_dom) const {
     ODI_DOMAIN_SCOPED_STATS(".meet");
 
@@ -571,7 +571,7 @@ public:
     } else if (o.is_bottom() || is_top()) { // this & bot or top & o, return o
       return o;
     } else {
-      meet_or_narrow_op mop(left, right, l_base_dom, r_base_dom, true);
+      meet_or_narrow_op mop(*this, o, l_base_dom, r_base_dom, true);
       bool is_bottom;
       patricia_tree_t res =
           apply_operation(mop, m_odi_map, o.m_odi_map, is_bottom);
@@ -584,8 +584,7 @@ public:
   }
 
   // Self meet
-  void compound_meet(const odi_map_domain_t &o, const object_domain_t &left,
-                     const object_domain_t &right, base_domain_t &l_base_dom,
+  void compound_meet(const odi_map_domain_t &o, base_domain_t &l_base_dom,
                      base_domain_t &r_base_dom) {
     ODI_DOMAIN_SCOPED_STATS(".meet");
 
@@ -594,7 +593,7 @@ public:
     } else if (o.is_bottom() || is_top()) { // this & bot or top & o, return o
       *this = o;
     } else {
-      meet_or_narrow_op mop(left, right, l_base_dom, r_base_dom, true);
+      meet_or_narrow_op mop(*this, o, l_base_dom, r_base_dom, true);
       bool is_bottom = false /*unused*/;
       apply_self_operation(mop, m_odi_map, o.m_odi_map, is_bottom);
       if (is_bottom) {
@@ -605,8 +604,6 @@ public:
 
   // Widening
   odi_map_domain_t widening(const odi_map_domain_t &o,
-                            const object_domain_t &left,
-                            const object_domain_t &right,
                             base_domain_t &l_base_dom,
                             base_domain_t &r_base_dom) const {
     ODI_DOMAIN_SCOPED_STATS(".widening");
@@ -616,7 +613,7 @@ public:
     } else if (o.is_bottom()) {
       return *this;
     } else {
-      join_or_widening_op wop(left, right, l_base_dom, r_base_dom, false);
+      join_or_widening_op wop(*this, o, l_base_dom, r_base_dom, false);
       bool is_bottom = false /*unused*/;
       patricia_tree_t res =
           apply_operation(wop, m_odi_map, o.m_odi_map, is_bottom);
@@ -645,8 +642,6 @@ public:
 
   // Narrowing
   odi_map_domain_t narrowing(const odi_map_domain_t &o,
-                             const object_domain_t &left,
-                             const object_domain_t &right,
                              base_domain_t &l_base_dom,
                              base_domain_t &r_base_dom) const {
     ODI_DOMAIN_SCOPED_STATS(".narrowing");
@@ -655,7 +650,7 @@ public:
     } else if (o.is_bottom() || is_top()) {
       return o;
     } else {
-      meet_or_narrow_op nop(left, right, l_base_dom, r_base_dom, false);
+      meet_or_narrow_op nop(*this, o, l_base_dom, r_base_dom, false);
       bool is_bottom;
       patricia_tree_t res =
           apply_operation(nop, m_odi_map, o.m_odi_map, is_bottom);
@@ -975,9 +970,8 @@ public:
         // to be loaded by a reg2, without loosing precision and remain
         // soundness perform reduction from object to base and then update the
         // cache.
-        if (reg_symb == boost::none) {
+        if (reg_symb == boost::none && out_obj_info.cache_reg_loaded_val()) {
           out_obj_info.cache_reg_loaded_val() = false;
-          abs_state.apply_reduction_from_object_to_base(out_prod, key);
           abs_state.apply_reduction_from_object_to_base(out_prod, key);
         }
         // new solution, delay reduction, keep new equality for rgn_w == reg
@@ -987,7 +981,6 @@ public:
         if (out_obj_info.cache_reg_stored_val()) {
           out_obj_info.cache_reg_stored_val() = false;
           abs_state.apply_reduction_from_base_to_object(out_prod, key);
-          abs_state.apply_reduction_from_object_to_base(out_prod, key);
         }
       }
       out_obj_info.cache_reg_loaded_val() = is_store == false;
