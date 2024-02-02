@@ -975,17 +975,18 @@ public:
           abs_state.apply_reduction_from_object_to_base(out_prod, key);
         }
         // new solution, delay reduction, keep new equality for rgn_w == reg
+        out_obj_info.cache_reg_stored_val() =
+            is_store == true && reg_symb != boost::none;
       } else { // call from ref_load
         // if cache needs to be loaded by a reg1, but it used to be stored
         // from a reg2, perform reduction from base to object
         if (out_obj_info.cache_reg_stored_val()) {
           out_obj_info.cache_reg_stored_val() = false;
+          abs_state.apply_reduction_from_object_to_base(out_prod, key);
           abs_state.apply_reduction_from_base_to_object(out_prod, key);
         }
+        out_obj_info.cache_reg_loaded_val() = true;
       }
-      out_obj_info.cache_reg_loaded_val() = is_store == false;
-      out_obj_info.cache_reg_stored_val() =
-          is_store == true && reg_symb != boost::none;
     }
     if (!is_store ||
         reg_symb != boost::none) { // only for load_ref and store_ref by reg

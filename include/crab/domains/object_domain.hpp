@@ -1195,7 +1195,7 @@ private:
     if (update_new_mru) {
       m_addrs_dom.add(get_or_insert_base_addr(ref), mru_obj_base);
     }
-    return test_two_addrs_equality(id, ref);
+    return !update_new_mru;
   }
 
   /// @brief project \p base_dom onto the dimensionality of \p m_eq_regs_dom
@@ -2406,6 +2406,9 @@ public:
           // forget the write region rgn_w in the equality field domain
           variable_t rgn_w = get_or_insert_write_region(rgn);
           m_ghost_var_eq_man.forget(rgn_w, *eq_flds_dom);
+          out_info.cache_reg_stored_val() = is_hit ? is_stored : false;
+          // forget the region rgn in the equality field domain
+          m_ghost_var_eq_man.forget(rgn, *eq_flds_dom);
         } else { // val is a variable (i.e. register)
           ghost_variables_t val_gvars = get_or_insert_gvars(val.get_variable());
           boost::optional<ghost_variables_eq_t> val_eq_gvars =
@@ -2456,8 +2459,6 @@ public:
             out_info.cache_reg_stored_val() = is_hit ? is_stored : false;
           }
         }
-        // forget the region rgn in the equality field domain
-        m_ghost_var_eq_man.forget(rgn, *eq_flds_dom);
         // update object info
         object_info_t out_obj_info = object_info_t(
             num_refs, boolean_value::get_true() /*Object is inited*/,
