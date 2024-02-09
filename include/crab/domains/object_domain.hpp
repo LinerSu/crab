@@ -2182,6 +2182,12 @@ public:
       //  if ref_load access a not null reference.
       // So zero case should not exist
       assert(!num_refs.is_zero());
+      if (num_refs.is_zero()) { // FIXME: handle the cast where region cast from
+                                // an unknown region to a valid region since it
+                                // requires to support unknown region, ignore
+                                // load / store for now
+        return;
+      }
 
       if (num_refs.is_one() && /*a flag to keep singleton in the base domain*/
           crab_domain_params_man::get().singletons_in_base()) {
@@ -2332,6 +2338,12 @@ public:
       const bool is_stored = obj_info_ref.cache_reg_stored_val();
       const small_range num_refs = obj_info_ref.refcount_val();
       assert(!num_refs.is_zero());
+      if (num_refs.is_zero()) { // FIXME: handle the cast where region cast from
+                                // an unknown region to a valid region since it
+                                // requires to support unknown region, ignore
+                                // load / store for now
+        return;
+      }
 
       if (num_refs.is_one() && /*a flag to keep singleton in the base domain*/
           crab_domain_params_man::get().singletons_in_base()) {
@@ -2415,10 +2427,12 @@ public:
               get_eq_gvars(val.get_variable());
           // Optimize: assign variable with constant value directly
           unsigned fully_assigned = 0;
-          auto rgn_eq_gvars =
+          auto rgn_eq_gvars = get_or_insert_eq_gvars(rgn);
+          auto rgnw_eq_gvars =
               get_or_insert_eq_gvars(get_or_insert_write_region(rgn));
           if (auto val_const = m_base_dom.at(val_gvars.get_var()).singleton()) {
             flds_dom.assign(rgn_gvars.get_var(), *val_const);
+            (*eq_flds_dom) -= rgnw_eq_gvars.get_var();
             (*eq_flds_dom) -= rgn_eq_gvars.get_var();
             fully_assigned++;
           } else {
@@ -2432,6 +2446,8 @@ public:
                     m_base_dom.at(offset_base_var).singleton()) {
               flds_dom.assign(rgn_gvars.get_offset_and_size().get_offset(),
                               *offset_const);
+              (*eq_flds_dom) -=
+                  rgnw_eq_gvars.get_offset_and_size().get_offset();
               (*eq_flds_dom) -= rgn_eq_gvars.get_offset_and_size().get_offset();
               fully_assigned++;
             } else {
@@ -2442,6 +2458,7 @@ public:
             if (auto size_const = m_base_dom.at(size_base_var).singleton()) {
               flds_dom.assign(rgn_gvars.get_offset_and_size().get_size(),
                               *size_const);
+              (*eq_flds_dom) -= rgnw_eq_gvars.get_offset_and_size().get_size();
               (*eq_flds_dom) -= rgn_eq_gvars.get_offset_and_size().get_size();
               fully_assigned++;
             } else {
@@ -2988,7 +3005,15 @@ public:
 
     if (!is_bottom()) {
       // REDUCTION: perform reduction
-      apply_reduction_based_on_flags();
+      if (!rhs.is_tautology() && !rhs.is_contradiction()) {
+        // Reduction required for the following code pattern
+        // lhs := a < b;
+        // assert(lhs);
+        // The assertion requires to obtain the value of lhs for assertion check
+        apply_reduction_based_on_flags(true);
+      } else {
+        apply_reduction_based_on_flags();
+      }
 
       auto b_rhs = m_ghost_var_num_man.rename_linear_cst(rhs);
       m_base_dom.assign_bool_cst(get_or_insert_gvars(lhs).get_var(), b_rhs);
@@ -3740,7 +3765,7 @@ public:
         // reset cache
         obj_info.cacheused_val() = boolean_value::get_false();
         obj_info.cachedirty_val() = boolean_value::get_false();
-        obj_info.sumpresence_val() = boolean_value::get_true();
+        obj_info.sumpresence_val() = obj_info.objinit_val();
         m_odi_map.set(id, odi_domain_product_t(std::move(obj_info),
                                                std::move(obj_value)));
       }
@@ -3953,6 +3978,11 @@ public:
                     const object_domain_t &caller_dom) override {
     OBJECT_DOMAIN_SCOPED_STATS(".callee_entry");
 
+    CRAB_LOG("inter-restrict1", crab::outs()
+                                    << "Compute the entry state at callsite "
+                                    << callsite.get_function()
+                                    << ". Caller: " << caller_dom << "\n";);
+
     auto rgn_in_group = [](const variable_t &rgn,
                            const classes_t &cls) -> bool {
       if (!rgn.get_type().is_region()) {
@@ -4053,6 +4083,11 @@ public:
   void caller_continuation(const callsite_info<variable_t> &callsite,
                            const object_domain_t &callee_dom) override {
     OBJECT_DOMAIN_SCOPED_STATS(".caller_continuation");
+
+    CRAB_LOG("inter-extend1", crab::outs()
+                                  << "Compute the return state at callsite "
+                                  << callsite.get_function()
+                                  << ". Callee: " << callee_dom << "\n";);
 
     auto rgn_in_group = [](const variable_t &rgn,
                            const classes_t &cls) -> bool {
