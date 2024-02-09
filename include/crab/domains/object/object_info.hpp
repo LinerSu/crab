@@ -169,6 +169,7 @@ public:
     return o;
   }
   std::string domain_name(void) const { return "Object Info"; }
+  void dump() const { write(crab::outs()); }
 };
 
 class id_val_generator_t {

@@ -499,6 +499,8 @@ public:
 
   void write(crab::crab_os &o) const override { get_absval()->write(o); }
 
+  void dump() const { write(crab::outs()); }
+
   friend crab::crab_os &operator<<(crab::crab_os &o, const this_domain_t &dom) {
     dom.write(o);
     return o;

@@ -845,7 +845,6 @@ public:
     prod.second().first().write(o);
     o << ", eq_fields: ";
     prod.second().second().write(o);
-    o << ")";
   }
 
   /// @brief a special log method for <info, value>
@@ -867,6 +866,7 @@ public:
     } else {
       odi_val_write(o, obj_val);
     }
+    o << ")";
   }
 
   void odi_write(crab_os &o, const map_value_t &prod) const {
