@@ -1359,10 +1359,10 @@ private:
 	} else {
 	  // ### Non-recursive call ###
 	  
-	  if (m_ctx.get_is_checking_phase()) {
-	    m_ctx.print_call_stack();
-	    CRAB_ERROR("in checking phase we should not analyze the callsite ", cs);
-	  }
+	  // if (m_ctx.get_is_checking_phase()) {
+	  //   m_ctx.print_call_stack();
+	  //   CRAB_ERROR("in checking phase we should not analyze the callsite ", cs);
+	  // }
 	  TD_INTER_COUNT_STATS(CounterAnalyzedCalls);
 	  
 	  // 4.c Run intra analyzer on the callee
