@@ -2436,8 +2436,16 @@ public:
             (*eq_flds_dom) -= rgn_eq_gvars.get_var();
             fully_assigned++;
           } else {
-            // assigning register with symbolic variable
-            m_eq_regs_dom.set(val_eq_gvars.value().get_var(), *reg_symb);
+            if (crab_domain_params_man::get().reduction_level() ==
+                object_domain_params::reduction_level_t::NO_REDUCTION) {
+              // if there is no reduction, we need to make sure soundness
+              // without providing rgn_w == val
+              (*flds_dom) -= rgn_eq_gvars.get_var();
+              (*eq_flds_dom) -= rgnw_eq_gvars.get_var();
+            } else {
+              // assigning register with symbolic variable
+              m_eq_regs_dom.set(val_eq_gvars.value().get_var(), *reg_symb);
+            }
           }
           if (val_eq_gvars.value().has_offset_and_size()) {
             auto offset_base_var = val_gvars.get_offset_and_size().get_offset();
@@ -2451,9 +2459,17 @@ public:
               (*eq_flds_dom) -= rgn_eq_gvars.get_offset_and_size().get_offset();
               fully_assigned++;
             } else {
-              m_eq_regs_dom.set(
-                  val_eq_gvars.value().get_offset_and_size().get_offset(),
-                  std::get<0>(*reg_offset_size_symb));
+              if (crab_domain_params_man::get().reduction_level() ==
+                  object_domain_params::reduction_level_t::NO_REDUCTION) {
+                (*flds_dom) -= rgn_gvars.get_offset_and_size().get_offset();
+                (*eq_flds_dom) -=
+                    rgnw_eq_gvars.get_offset_and_size().get_offset();
+              } else {
+                // assigning register with symbolic variable
+                m_eq_regs_dom.set(
+                    val_eq_gvars.value().get_offset_and_size().get_offset(),
+                    std::get<0>(*reg_offset_size_symb));
+              }
             }
             if (auto size_const = m_base_dom.at(size_base_var).singleton()) {
               flds_dom.assign(rgn_gvars.get_offset_and_size().get_size(),
@@ -2462,9 +2478,17 @@ public:
               (*eq_flds_dom) -= rgn_eq_gvars.get_offset_and_size().get_size();
               fully_assigned++;
             } else {
-              m_eq_regs_dom.set(
-                  val_eq_gvars.value().get_offset_and_size().get_size(),
-                  std::get<1>(*reg_offset_size_symb));
+              if (crab_domain_params_man::get().reduction_level() ==
+                  object_domain_params::reduction_level_t::NO_REDUCTION) {
+                (*flds_dom) -= rgn_gvars.get_offset_and_size().get_size();
+                (*eq_flds_dom) -=
+                    rgnw_eq_gvars.get_offset_and_size().get_size();
+              } else {
+                // assigning register with symbolic variable
+                m_eq_regs_dom.set(
+                    val_eq_gvars.value().get_offset_and_size().get_size(),
+                    std::get<1>(*reg_offset_size_symb));
+              }
             }
           }
           // forget old property for region rgn
@@ -2476,6 +2500,7 @@ public:
             out_info.cache_reg_stored_val() = is_hit ? is_stored : false;
           }
         }
+
         // update object info
         object_info_t out_obj_info = object_info_t(
             num_refs, boolean_value::get_true() /*Object is inited*/,
