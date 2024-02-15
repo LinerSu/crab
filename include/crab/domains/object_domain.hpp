@@ -3964,18 +3964,38 @@ public:
         crab_domain_params_man::get().singletons_in_base()) {
       base_abstract_domain_t tmp = src_dom.m_base_dom;
       for (unsigned i = 0, len = src_rgns_no_unknown.size(); i < len; ++i) {
-        tmp.expand(src_rgns_no_unknown[i], dst_rgns_no_unknown[i]);
+        auto src_rgn_gvars_opt = src_dom.get_num_gvars(src_rgns_no_unknown[i]);
+        if (src_rgn_gvars_opt == boost::none)
+          continue;
+        ghost_variables_t dst_rgn_gvars =
+            dst_dom.get_or_insert_gvars(dst_rgns_no_unknown[i]);
+        dst_rgn_gvars.forget(tmp);
+        src_rgn_gvars_opt.value().expand(tmp, dst_rgn_gvars);
       }
       dst_dom.m_ghost_var_num_man.project(dst_rgns_no_unknown, tmp);
       dst_dom.m_base_dom &= tmp;
     } else { // num_refs > 1
       for (unsigned i = 0, len = src_rgns_no_unknown.size(); i < len; ++i) {
-        odi_map_t::object_sum_val(prod_value_ref)
-            .expand(src_rgns_no_unknown[i], dst_rgns_no_unknown[i]);
-        odi_map_t::object_cache_val(prod_value_ref)
-            .expand(src_rgns_no_unknown[i], dst_rgns_no_unknown[i]);
-        odi_map_t::object_eq_val(prod_value_ref)
-            .expand(src_rgns_no_unknown[i], dst_rgns_no_unknown[i]);
+        auto src_rgn_gvars_opt = src_dom.get_num_gvars(src_rgns_no_unknown[i]);
+        auto src_rgn_eq_gvars_opt =
+            src_dom.get_eq_gvars(src_rgns_no_unknown[i]);
+        if (src_rgn_gvars_opt == boost::none ||
+            src_rgn_eq_gvars_opt == boost::none) {
+          continue;
+        }
+        ghost_variables_t dst_rgn_gvars =
+            dst_dom.get_or_insert_gvars(dst_rgns_no_unknown[i]);
+        auto dst_rgn_eq_gvars =
+            dst_dom.get_or_insert_eq_gvars(dst_rgns_no_unknown[i]);
+        dst_rgn_gvars.forget(odi_map_t::object_sum_raw_val(prod_value_ref));
+        dst_rgn_gvars.forget(odi_map_t::object_cache_raw_val(prod_value_ref));
+        dst_rgn_eq_gvars.forget(odi_map_t::object_eq_raw_val(prod_value_ref));
+        src_rgn_gvars_opt.value().expand(
+            odi_map_t::object_sum_raw_val(prod_value_ref), dst_rgn_gvars);
+        src_rgn_gvars_opt.value().expand(
+            odi_map_t::object_cache_raw_val(prod_value_ref), dst_rgn_gvars);
+        src_rgn_eq_gvars_opt.value().expand(
+            odi_map_t::object_eq_raw_val(prod_value_ref), dst_rgn_eq_gvars);
       }
       dst_dom.m_ghost_var_num_man.project(
           dst_rgns_no_unknown, odi_map_t::object_sum_raw_val(prod_value_ref));
