@@ -982,7 +982,9 @@ public:
         // from a reg2, perform reduction from base to object
         if (out_obj_info.cache_reg_stored_val()) {
           out_obj_info.cache_reg_stored_val() = false;
-          abs_state.apply_reduction_from_object_to_base(out_prod, key);
+          if (out_obj_info.cache_reg_loaded_val()) {
+            abs_state.apply_reduction_from_object_to_base(out_prod, key);
+          }
           abs_state.apply_reduction_from_base_to_object(out_prod, key);
         }
         out_obj_info.cache_reg_loaded_val() = true;
