@@ -1471,6 +1471,11 @@ private:
                                            const obj_id_t &id) const {
 
     OBJECT_DOMAIN_SCOPED_STATS(".reduction");
+    if (crab_domain_params_man::get().reduction_level() ==
+        object_domain_params::reduction_level_t::NO_REDUCTION) {
+      // No reduction when object.reduction_level=NONE
+      return;
+    }
     // The following reduction is performed the followings:
     // a. get equalities constraints from 'eq_regs_dom' and 'eq_flds_dom'
     // b. rename a field from 'reduced_cache' to a register
@@ -1539,7 +1544,9 @@ private:
     }
     map.clear();
     reduced_cache.forget(obj_flds);
-    base_dom &= *reduced_cache;
+    if (!(base_dom <= *reduced_cache)) {
+      base_dom &= *reduced_cache;
+    }
     CRAB_LOG(
         "object-reduce", crab::outs() << "After Reduction:\n"
                                       << "base = " << base_dom << "\n"
@@ -1559,6 +1566,11 @@ private:
                                            const obj_id_t &id) const {
 
     OBJECT_DOMAIN_SCOPED_STATS(".reduction");
+    if (crab_domain_params_man::get().reduction_level() ==
+        object_domain_params::reduction_level_t::NO_REDUCTION) {
+      // No reduction when object.reduction_level=NONE
+      return;
+    }
     // The following reduction is performed the followings:
     // a. get equalities constraints from 'eq_regs_dom' and 'eq_flds_dom'
     // b. rename a register from 'base_dom' to a field
@@ -3838,6 +3850,7 @@ public:
   }
 
   std::string domain_name() const override {
+#if 0
     field_abstract_domain_t fld_dom;
     const char *base_prefix = "Base:";
     std::string base_name = m_base_dom.domain_name();
@@ -3859,6 +3872,9 @@ public:
     name.append(addr_name);
     name.append(")");
     return name;
+#else
+    return "Object";
+#endif
   }
 
   void write(crab_os &o) const override {
