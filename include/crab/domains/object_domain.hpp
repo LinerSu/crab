@@ -2549,6 +2549,16 @@ public:
     ERROR_IF_NOT_REF(ref1, __LINE__);
     ERROR_IF_NOT_REF(ref2, __LINE__);
 
+    auto eval = [this](const linear_expression_t &e) {
+      interval_t r = e.constant();
+      for (auto p : e) {
+        ERROR_IF_NOT_INT(p.second, __LINE__);
+        r += p.first *
+             m_base_dom.operator[](get_or_insert_gvars(p.second).get_var());
+      }
+      return r;
+    };
+
     if (is_bottom()) {
       return;
     }
@@ -2566,12 +2576,30 @@ public:
       ref2_gvars.get_offset_and_size().forget(m_base_dom);
     }
 
-    // assign equality: ref2 == ref1
-    // In C memory model,
-    // pointer arithmetic cannot be performed from different memory objects.
-    // Thus, a precondition is ref2 and ref1 are belongs to a same memory obj.
-    m_addrs_dom.add(get_or_insert_base_addr(ref1),
-                    get_or_insert_base_addr(ref2));
+    if (!(rgn1 == rgn2 && (eval(offset) == (number_t(0))))) {
+      // This is for getelementptr inbounds in LLVM IR.
+      // This happened when we have an array following the object abstraction.
+      // The abstract object is now increasing the reference count.
+      if (auto id_opt = get_obj_id(rgn1)) {
+        const odi_domain_product_t *prod_ref = m_odi_map.find(*id_opt);
+        if (!prod_ref) { // object goes to top
+          return;
+        }
+        const object_info_t &obj_prod_info =
+            odi_map_t::object_info_val(*prod_ref);
+        const small_range &num_refs = obj_prod_info.refcount_val();
+        if (num_refs.is_one()) {
+          change_object_status(*id_opt);
+        }
+      }
+    } else {
+      // assign equality: ref2 == ref1
+      // In C memory model,
+      // pointer arithmetic cannot be performed from different memory objects.
+      // Thus, a precondition is ref2 and ref1 are belongs to a same memory obj.
+      m_addrs_dom.add(get_or_insert_base_addr(ref1),
+                      get_or_insert_base_addr(ref2));
+    }
 
     m_base_dom.assign(ref2_gvars.get_var(), ref1_gvars.get_var() + offset);
 
