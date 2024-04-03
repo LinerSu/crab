@@ -2576,7 +2576,7 @@ public:
       ref2_gvars.get_offset_and_size().forget(m_base_dom);
     }
 
-    if (!(rgn1 == rgn2 && (eval(offset) == (number_t(0))))) {
+    if (rgn1 == rgn2 && (eval(offset) != (number_t(0)))) {
       // This is for getelementptr inbounds in LLVM IR.
       // This happened when we have an array following the object abstraction.
       // The abstract object is now increasing the reference count.
