@@ -1261,7 +1261,8 @@ private:
   ///  object.reduction_level=NO_REDUCTION
   /// @param[in] reduce_for_assert a special bool indicate reduction is called
   /// before assertion
-  void apply_reduction_based_on_flags(bool reduce_for_assert = false) {
+  void apply_reduction_based_on_flags(bool reduce_for_assert = false,
+                                      bool reset_bool_flag = true) {
     OBJECT_DOMAIN_SCOPED_STATS(".overall_reduction");
     if (crab_domain_params_man::get().reduction_level() ==
             object_domain_params::reduction_level_t::NO_REDUCTION ||
@@ -1272,6 +1273,7 @@ private:
       return;
     }
     bool no_store = true;
+    bool no_load = true;
     CRAB_LOG("object-reduction", crab::outs() << "State Before Reduction:\n"
                                               << *this << "\n";);
     // giving an odi map domain:
@@ -1298,16 +1300,16 @@ private:
       if (prod_info.cache_reg_loaded_val()) {
         // The reduction should only be performed out when some register are
         // loaded values from this object
+        no_load = false;
         object_value_t out_prod_val = odi_map_t::object_odi_val(*prod);
         object_info_t out_prod_info = prod_info;
-        out_prod_info.cache_reg_loaded_val() = false;
         apply_reduction_from_object_to_base(m_base_dom, out_prod_val, id);
         m_odi_map.set(id, odi_domain_product_t(std::move(out_prod_info),
                                                std::move(out_prod_val)));
       }
     }
 
-    if (no_store)
+    if (no_store && no_load)
       return;
 
     base_abstract_domain_t regs_only_base =
@@ -1326,12 +1328,17 @@ private:
               .singletons_in_base()) { // singleton object && object in base
         continue;                      // no need to perform reduction
       }
-      if (prod_info.cache_reg_stored_val()) {
+      if (prod_info.cache_reg_stored_val() ||
+          prod_info.cache_reg_loaded_val()) {
         // if some fields are stored from regs
         // perform reduction from base to obj
         object_value_t out_prod_val = odi_map_t::object_odi_val(*prod);
         object_info_t out_prod_info = prod_info;
-        out_prod_info.cache_reg_stored_val() = false;
+        if (reset_bool_flag) {
+          out_prod_info.cache_reg_loaded_val() = false;
+          out_prod_info.cache_reg_stored_val() = false;
+        }
+        // out_prod_info.cache_reg_stored_val() = false;
         apply_reduction_from_base_to_object(regs_only_base, out_prod_val, id);
         m_odi_map.set(id, odi_domain_product_t(std::move(out_prod_info),
                                                std::move(out_prod_val)));
@@ -1364,18 +1371,19 @@ private:
           // perform reduction from object to base
           object_value_t out_prod_val = odi_map_t::object_odi_val(*prod_ref);
           object_info_t out_prod_info = prod_info;
-          out_prod_info.cache_reg_loaded_val() = false;
+          // out_prod_info.cache_reg_loaded_val() = false;
           apply_reduction_from_object_to_base(m_base_dom, out_prod_val, id);
           m_odi_map.set(id, odi_domain_product_t(std::move(out_prod_info),
                                                  std::move(out_prod_val)));
         }
       } else {
-        if (prod_info.cache_reg_stored_val()) {
+        if (prod_info.cache_reg_stored_val() ||
+            prod_info.cache_reg_loaded_val()) {
           // if some fields are stored from regs
           // perform reduction from base to obj
           object_value_t out_prod_val = odi_map_t::object_odi_val(*prod_ref);
           object_info_t out_prod_info = prod_info;
-          out_prod_info.cache_reg_stored_val() = false;
+          // out_prod_info.cache_reg_stored_val() = false;
           base_abstract_domain_t regs_only_base =
               std::move(project_onto_eq_regs(m_base_dom));
           apply_reduction_from_base_to_object(regs_only_base, out_prod_val, id);
@@ -1620,13 +1628,11 @@ private:
     for (auto it = map.begin(); it != map.end(); ++it) {
       const base_dom_variable_vector_t flds = std::get<0>(it->second);
       const base_dom_variable_vector_t regs = std::get<1>(it->second);
-      if (flds.empty() || regs.empty()) {
+      if (flds.empty()) {
         // lost any equalities between flds and regs. Do not perform reduction
         continue;
       }
       assert(flds.size() > 0);
-      assert(regs.size() > 0);
-      const base_dom_variable_t &reg = regs[0];
       auto it_flds = flds.begin();
       const base_dom_variable_t &var = *it_flds;
       auto it_map = rgn_wrt_map.find(var);
@@ -1634,6 +1640,11 @@ private:
         flds_to_forget.push_back(it_map->second);
         shadow_flds_used.push_back(it_map->first);
       }
+      if (regs.empty()) {
+        continue;
+      }
+      assert(regs.size() > 0);
+      const base_dom_variable_t &reg = regs[0];
       while (it_flds != flds.end()) {
         if (it_flds == flds.begin()) {
           // base_dom.rename({reg}, {var});
@@ -1647,10 +1658,11 @@ private:
     // FIXME: avoid copying, use efficient project onto
     base_abstract_domain_t reduced_base = base_dom;
     reduced_base.project(all_flds);
+    (*cache_dom).forget(flds_to_forget);
     *cache_dom &= reduced_base;
     // renaming: from rgn_w to rgn
     (*cache_dom).forget(flds_to_forget);
-    // (*eq_flds_dom).forget(shadow_flds_used);
+    (*eq_flds_dom).forget(flds_to_forget);
     (*cache_dom).rename(shadow_flds_used, flds_to_forget);
 
     CRAB_LOG(
@@ -2233,49 +2245,74 @@ public:
         boost::optional<ghost_variables_eq_t> res_eq_gvars = get_eq_gvars(res);
         const object_value_t &out_prod = odi_map_t::object_odi_val(*prod_ref);
         const cache_domain_t &flds_dom = odi_map_t::object_cache_val(out_prod);
+        const eq_fields_domain_t &eq_flds_dom =
+            odi_map_t::object_eq_val(out_prod);
         if (auto rgn_const = flds_dom.at(rgn_gvars.get_var()).singleton()) {
           m_base_dom.assign(res_gvars.get_var(), *rgn_const);
-          m_eq_regs_dom -= res_eq_gvars.value().get_var();
           fully_assigned++;
-        } else {
-          // assigning register with symbolic variable
-          m_eq_regs_dom.set(res_eq_gvars.value().get_var(), *reg_symb);
         }
+        // assigning register with symbolic variable
+        m_eq_regs_dom.set(res_eq_gvars.value().get_var(), *reg_symb);
         if (res_eq_gvars.value().has_offset_and_size()) {
           auto offset_base_var = rgn_gvars.get_offset_and_size().get_offset();
           auto size_base_var = rgn_gvars.get_offset_and_size().get_size();
           if (auto offset_const = flds_dom.at(offset_base_var).singleton()) {
             m_base_dom.assign(res_gvars.get_offset_and_size().get_offset(),
                               *offset_const);
-            m_eq_regs_dom -=
-                res_eq_gvars.value().get_offset_and_size().get_offset();
             fully_assigned++;
-          } else {
-            m_eq_regs_dom.set(
-                res_eq_gvars.value().get_offset_and_size().get_offset(),
-                std::get<0>(*reg_offset_size_symb));
           }
+          m_eq_regs_dom.set(
+              res_eq_gvars.value().get_offset_and_size().get_offset(),
+              std::get<0>(*reg_offset_size_symb));
           if (auto sz_const = flds_dom.at(size_base_var).singleton()) {
             m_base_dom.assign(res_gvars.get_offset_and_size().get_size(),
                               *sz_const);
-            m_eq_regs_dom -=
-                res_eq_gvars.value().get_offset_and_size().get_size();
             fully_assigned++;
-          } else {
-            m_eq_regs_dom.set(
-                res_eq_gvars.value().get_offset_and_size().get_size(),
-                std::get<1>(*reg_offset_size_symb));
           }
+          m_eq_regs_dom.set(
+              res_eq_gvars.value().get_offset_and_size().get_size(),
+              std::get<1>(*reg_offset_size_symb));
         }
         bool is_res_ref = res_eq_gvars.value().has_offset_and_size();
-        if ((!is_res_ref && fully_assigned == 1) ||
-            (is_res_ref && fully_assigned == 3)) {
+        bool update_load = (!is_res_ref && fully_assigned == 1) ||
+                           (is_res_ref && fully_assigned == 3);
+        auto rgn_w = get_or_insert_write_region(rgn);
+        auto rgnw_eq_gvars = get_or_insert_eq_gvars(rgn_w);
+        bool forget_w = false;
+        // equalties for rgn_w should be dropped since if load_ref follows
+        // an assume. rgnw == reg will no longer equals.
+        if (rgn.get_type().is_reference_region()) {
+          forget_w |=
+              (*eq_flds_dom)
+                  .find_opt(rgnw_eq_gvars.get_offset_and_size().get_offset()) !=
+              boost::none;
+          forget_w |=
+              (*eq_flds_dom)
+                  .find_opt(rgnw_eq_gvars.get_offset_and_size().get_size()) !=
+              boost::none;
+        }
+        forget_w |=
+            (*eq_flds_dom).find_opt(rgnw_eq_gvars.get_var()) != boost::none;
+        if (update_load || forget_w) {
           object_info_t out_info = odi_map_t::object_info_val(*prod_ref);
-          out_info.cache_reg_loaded_val() = is_hit ? is_loaded : false;
-          // update odi map
-          m_odi_map.set(*id_opt, odi_domain_product_t(
-                                     std::move(out_info),
-                                     std::move(object_value_t(out_prod))));
+          if (update_load) {
+            out_info.cache_reg_loaded_val() = is_hit ? is_loaded : false;
+          }
+          if (forget_w) {
+            object_value_t out_prod = odi_map_t::object_odi_val(*prod_ref);
+            eq_fields_domain_t &eq_flds_dom =
+                odi_map_t::object_eq_val(out_prod);
+            m_ghost_var_eq_man.forget(rgn_w, *eq_flds_dom);
+            // update odi map
+            m_odi_map.set(*id_opt, odi_domain_product_t(
+                                       std::move(out_info),
+                                       std::move(object_value_t(out_prod))));
+          } else {
+            // update odi map
+            m_odi_map.set(*id_opt, odi_domain_product_t(
+                                       std::move(out_info),
+                                       std::move(object_value_t(out_prod))));
+          }
         }
       }
     }
@@ -2623,7 +2660,7 @@ public:
       }
 
       // REDUCTION: perform reduction
-      apply_reduction_based_on_flags(true);
+      apply_reduction_based_on_flags(true, false);
 
       auto lin_cst = m_ghost_var_num_man.ghosting_ref_cst_to_linear_cst(
           ref_cst, ghost_variable_kind::ADDRESS);
@@ -2656,6 +2693,7 @@ public:
                           get_or_insert_base_addr(lhs));
         }
       }
+      apply_reduction_based_on_flags(true);
     }
 
     CRAB_LOG("object",
@@ -3127,11 +3165,12 @@ public:
 
     if (!is_bottom()) {
       // REDUCTION: perform reduction
-      apply_reduction_based_on_flags(true);
+      apply_reduction_based_on_flags(true, false);
 
       m_base_dom.assume_bool(get_or_insert_gvars(v).get_var(), is_negated);
       m_is_bottom = m_base_dom.is_bottom();
       m_eq_regs_dom -= v;
+      apply_reduction_based_on_flags(true);
     }
   }
 
