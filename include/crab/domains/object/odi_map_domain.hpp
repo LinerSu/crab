@@ -902,7 +902,8 @@ public:
     if (obj_info.cachedirty_val().is_true()) {
       // commit cache if the cache is dirty
       bool is_summary_absence = obj_info.sumpresence_val().is_false();
-      if (is_summary_absence) {
+      const small_range &num_refs = obj_info.refcount_val();
+      if (is_summary_absence || num_refs.is_one()) {
         // Even if a object is not singleton, the summary is still absence
         // if no cache flushed have occurred
         sum = cache;
@@ -941,13 +942,13 @@ public:
         cache is empty or current reference does not refer to the mru object
     */
     if (cache_used.is_false() || is_ref_mru == false) { // cache is missed
-      if (out_obj_info.refcount_val() == small_range::oneOrMore()) {
-        // Step1: commit cache if the cache is dirty
-        abs_state.commit_cache_if_dirty(out_prod, out_obj_info, key);
-        if (out_obj_info.sumpresence_val().is_false()) {
-          out_obj_info.sumpresence_val() = cache_used;
-        }
+      // if (out_obj_info.refcount_val() == small_range::oneOrMore()) {
+      // Step1: commit cache if the cache is dirty
+      abs_state.commit_cache_if_dirty(out_prod, out_obj_info, key);
+      if (out_obj_info.sumpresence_val().is_false()) {
+        out_obj_info.sumpresence_val() = cache_used;
       }
+      // }
       // Step2: update cache for new MRU object)
       update_cache(out_prod.first(), out_prod.second().first());
       // Step3: update address dom and object info

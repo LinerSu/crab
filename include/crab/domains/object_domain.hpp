@@ -984,23 +984,35 @@ private:
   /// @note use this function when the base address is required for operation
   /// @warning do not use this function to check whether a based address is
   /// created
-  variable_t get_or_insert_base_addr(const variable_t &v) {
+  variable_t get_or_insert_base_addr(const variable_t &v,
+                                     bool is_cache = false) {
     assert(v.get_type().is_reference() || v.get_type().is_region());
+    if (!is_cache) {
+      assert(v.get_type().is_reference() || v.get_type().is_reference_region());
+    }
     if (!m_refs_base_addrs_map) { // create a ref - base addr map if it is null
       m_refs_base_addrs_map =
           std::make_shared<std::unordered_map<variable_t, variable_t>>();
     }
-    auto it = (*m_refs_base_addrs_map).find(v);
+    variable_t tmp = v;
+    if (is_cache) {
+      varname_t v_var_name = v.name();
+      std::string str_mru_name = "_mru";
+      varname_t mru_name = v_var_name.get_var_factory().get_or_insert_varname(
+          v_var_name, str_mru_name);
+      variable_t v_rgn_mru(mru_name, v.get_type());
+      tmp = v_rgn_mru;
+    }
+    auto it = (*m_refs_base_addrs_map).find(tmp);
     if (it != (*m_refs_base_addrs_map).end()) {
       return it->second;
     }
-    varname_t v_var_name = v.name();
-    std::string str_base_name =
-        v.get_type().is_reference() ? "_base" : "_mru_base";
+    varname_t v_var_name = tmp.name();
+    std::string str_base_name = "_base";
     varname_t base_name = v_var_name.get_var_factory().get_or_insert_varname(
         v_var_name, str_base_name);
     variable_t v_base(base_name, crab::INT_TYPE, 32);
-    (*m_refs_base_addrs_map).insert({v, v_base});
+    (*m_refs_base_addrs_map).insert({tmp, v_base});
     return v_base;
   }
 
@@ -1068,21 +1080,14 @@ private:
   //   return it->second;
   // }
 
-  /// @brief check whether two reference variable refer the same memory object
-  /// @param[in] x a reference variable
-  /// @param[in] y a reference variable
-  /// @return true if x_base == y_base satisfies in address domain
-  bool test_two_addrs_equality(const variable_t &x, const variable_t &y) {
-    return m_addrs_dom.equals(get_or_insert_base_addr(x),
-                              get_or_insert_base_addr(y));
-  }
-
   /// @brief check the reference refer the MRU object
   /// @param ref a reference variable
   /// @param id an object id
   /// @return true if ref_base == id_mru_base satisfies in address domain
   bool test_ref_refer_mru_object(const variable_t &ref, const obj_id_t &id) {
-    return test_two_addrs_equality(ref, id);
+    auto ref_base = get_or_insert_base_addr(ref);
+    auto id_mru_base = get_or_insert_base_addr(id, true);
+    return m_addrs_dom.equals(ref_base, id_mru_base);
   }
 
   /***************** ODI map operations *****************/
@@ -1173,14 +1178,14 @@ private:
       bool is_store) {
 
     // get the variable represented the mru base address
-    variable_t mru_obj_base = get_or_insert_base_addr(id);
+    variable_t mru_obj_base = get_or_insert_base_addr(id, true);
     CRAB_LOG(
         "object-entailment",
         crab::outs() << mru_obj_base << " == " << get_or_insert_base_addr(ref)
                      << "?\n"
                      << "Addrs = " << m_addrs_dom << "\n"
                      << "Is mru cached? "
-                     << (test_two_addrs_equality(id, ref) ? "true" : "false")
+                     << (test_ref_refer_mru_object(ref, id) ? "true" : "false")
                      << "\n";);
     ghost_variables_eq_t rgn_eq_gvars = get_or_insert_eq_gvars(rgn);
     if (is_store && reg_symb != boost::none) {
@@ -1189,11 +1194,20 @@ private:
 
     bool update_new_mru = m_odi_map.invalidate_cache_if_miss(
         id, *this, std::move(rgn_eq_gvars), reg_symb, offset_size_symb,
-        test_two_addrs_equality(id, ref), is_store);
+        test_ref_refer_mru_object(ref, id), is_store);
 
     // update address dom and object info if cache is missed
     if (update_new_mru) {
       m_addrs_dom.add(get_or_insert_base_addr(ref), mru_obj_base);
+      // remove pointer alias information for fields since cache is updated
+      variable_vector_t obj_flds, obj_base_flds;
+      get_obj_flds(id, obj_flds);
+      for (const auto &v : obj_flds) {
+        if (v.get_type().is_reference_region()) {
+          obj_base_flds.push_back(get_or_insert_base_addr(v));
+        }
+      }
+      m_addrs_dom.forget(obj_base_flds);
     }
     return !update_new_mru;
   }
@@ -1635,13 +1649,13 @@ private:
       assert(flds.size() > 0);
       auto it_flds = flds.begin();
       const base_dom_variable_t &var = *it_flds;
+      if (regs.empty()) {
+        continue;
+      }
       auto it_map = rgn_wrt_map.find(var);
       if (it_map != rgn_wrt_map.end()) {
         flds_to_forget.push_back(it_map->second);
         shadow_flds_used.push_back(it_map->first);
-      }
-      if (regs.empty()) {
-        continue;
       }
       assert(regs.size() > 0);
       const base_dom_variable_t &reg = regs[0];
@@ -2314,6 +2328,11 @@ public:
                                        std::move(object_value_t(out_prod))));
           }
         }
+        // if rgn is reference, we add rgn_base == val
+        if (res.get_type().is_reference()) {
+          m_addrs_dom.add(get_or_insert_base_addr(res),
+                          get_or_insert_base_addr(rgn));
+        }
       }
     }
 
@@ -2548,6 +2567,12 @@ public:
               (is_val_ref && fully_assigned == 3)) {
             out_info.cache_reg_stored_val() = is_hit ? is_stored : false;
           }
+        }
+
+        // if rgn is reference, we add rgn_base == val
+        if (val.is_variable() && val.get_type().is_reference()) {
+          m_addrs_dom.add(get_or_insert_base_addr(val.get_variable()),
+                          get_or_insert_base_addr(rgn));
         }
 
         // update object info
@@ -3091,11 +3116,12 @@ public:
 
     if (!is_bottom()) {
       // REDUCTION: perform reduction
-      apply_reduction_based_on_flags(true);
+      apply_reduction_based_on_flags(true, false);
 
       auto b_csts = m_ghost_var_num_man.rename_linear_cst_sys(csts);
       m_base_dom += b_csts;
       m_is_bottom = m_base_dom.is_bottom();
+      apply_reduction_based_on_flags(true);
     }
   }
 
@@ -3347,6 +3373,10 @@ public:
                 v, odi_map_t::object_cache_raw_val(prod_value_ref));
             m_ghost_var_eq_man.forget(
                 v, odi_map_t::object_eq_raw_val(prod_value_ref));
+            if (auto v_w = get_write_region(v)) {
+              m_ghost_var_eq_man.forget(
+                  *v_w, odi_map_t::object_eq_raw_val(prod_value_ref));
+            }
           }
           m_odi_map.set(*id_opt,
                         odi_domain_product_t(std::move(prod_info_ref),
@@ -3374,7 +3404,7 @@ public:
     }
 
     // REDUCTION: perform reduction
-    apply_reduction_based_on_flags();
+    apply_reduction_based_on_flags(true, false);
 
     CRAB_LOG("object-forget", crab::outs() << "Forgetting (";
              object_domain_impl::print_vector(crab::outs(), variables);
@@ -3415,38 +3445,36 @@ public:
       const variable_vector_t &flds_to_forget = kv.second;
       variable_vector_t obj_flds;
       get_obj_flds(id, obj_flds);
-      if (obj_flds.size() == flds_to_forget.size()) {
-        // if forget all fields, forget this object
-        m_odi_map -= id;
-      } else {
-        // retrieve an abstract object info
-        const odi_domain_product_t *prod_ref = m_odi_map.find(id);
-        if (!prod_ref) {
-          continue;
-        }
-        object_info_t prod_info_ref = odi_map_t::object_info_val(*prod_ref);
-        const small_range &num_refs = prod_info_ref.refcount_val();
-        object_value_t prod_value_ref = odi_map_t::object_odi_val(*prod_ref);
-        if (num_refs.is_one() &&
-            crab_domain_params_man::get()
-                .singletons_in_base()) { // singleton object in the base
-          non_odi_vars.insert(non_odi_vars.end(), flds_to_forget.begin(),
-                              flds_to_forget.end());
-        } else if (obj_flds.size() !=
-                   flds_to_forget.size()) { // non-singleton object
-          // partially forget field(s)
-          for (auto v : flds_to_forget) {
-            m_ghost_var_num_man.forget(
-                v, odi_map_t::object_sum_raw_val(prod_value_ref));
-            m_ghost_var_num_man.forget(
-                v, odi_map_t::object_cache_raw_val(prod_value_ref));
+      // retrieve an abstract object info
+      const odi_domain_product_t *prod_ref = m_odi_map.find(id);
+      if (!prod_ref) {
+        continue;
+      }
+      object_info_t prod_info_ref = odi_map_t::object_info_val(*prod_ref);
+      const small_range &num_refs = prod_info_ref.refcount_val();
+      object_value_t prod_value_ref = odi_map_t::object_odi_val(*prod_ref);
+      if (num_refs.is_one() &&
+          crab_domain_params_man::get()
+              .singletons_in_base()) { // singleton object in the base
+        non_odi_vars.insert(non_odi_vars.end(), flds_to_forget.begin(),
+                            flds_to_forget.end());
+      } else { // use odi map
+        // forget field(s)
+        for (auto v : flds_to_forget) {
+          m_ghost_var_num_man.forget(
+              v, odi_map_t::object_sum_raw_val(prod_value_ref));
+          m_ghost_var_num_man.forget(
+              v, odi_map_t::object_cache_raw_val(prod_value_ref));
+          m_ghost_var_eq_man.forget(
+              v, odi_map_t::object_eq_raw_val(prod_value_ref));
+          if (auto v_w = get_write_region(v)) {
             m_ghost_var_eq_man.forget(
-                v, odi_map_t::object_eq_raw_val(prod_value_ref));
+                *v_w, odi_map_t::object_eq_raw_val(prod_value_ref));
           }
         }
-        m_odi_map.set(id, odi_domain_product_t(std::move(prod_info_ref),
-                                               std::move(prod_value_ref)));
       }
+      m_odi_map.set(id, odi_domain_product_t(std::move(prod_info_ref),
+                                             std::move(prod_value_ref)));
     }
 
     // forget registers, references
@@ -3953,11 +3981,9 @@ public:
                print_flds_id_map(o); o << ",\n"
                                        << "BaseDom=";
                m_ghost_var_num_man.write(o, m_base_dom);
-               o << ","
-                 << "Addrs=" << m_addrs_dom;
-               o << ","
-                 << "Regs=" << m_eq_regs_dom;
-               o << ","; object_write(o); o << ")\n"; return;);
+               o << ",\nAddrs=" << m_addrs_dom;
+               o << ",\nRegs=" << m_eq_regs_dom; o << ","; object_write(o);
+               o << ")\n"; return;);
       o << "{}";
     } else {
       CRAB_LOG("object-print", o << "("
@@ -3965,10 +3991,7 @@ public:
                print_flds_id_map(o); o << ",\n"
                                        << "BaseDom=";
                m_ghost_var_num_man.write(o, m_base_dom);
-               o << ","
-                 << "Addrs=" << m_addrs_dom;
-               o << ","
-                 << "Regs=" << m_eq_regs_dom;
+               o << "\nAddrs=" << m_addrs_dom; o << "\nRegs=" << m_eq_regs_dom;
                o << ","; object_write(o); o << ")\n"; return;);
       o << "Base = ";
       m_ghost_var_num_man.write(o, m_base_dom);
