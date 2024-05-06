@@ -2838,12 +2838,18 @@ public:
         base_lhs.assign(m_base_dom, base_rhs);
       } else { // num_refs > 1, non-singleton, use odi map
         // copy field
-        base_lhs.forget(odi_map_t::object_sum_raw_val(prod_value_ref));
-        base_lhs.forget(odi_map_t::object_cache_raw_val(prod_value_ref));
-        base_lhs.assign(odi_map_t::object_sum_raw_val(prod_value_ref),
-                        base_rhs);
-        base_lhs.assign(odi_map_t::object_cache_raw_val(prod_value_ref),
-                        base_rhs);
+        if (!odi_map_t::object_sum_raw_val(prod_value_ref).is_top()) {
+          base_lhs.forget(odi_map_t::object_sum_raw_val(prod_value_ref));
+          base_lhs.assign(odi_map_t::object_sum_raw_val(prod_value_ref),
+                          base_rhs);
+          base_rhs.forget(odi_map_t::object_sum_raw_val(prod_value_ref));
+        }
+        if (!odi_map_t::object_cache_raw_val(prod_value_ref).is_top()) {
+          base_lhs.forget(odi_map_t::object_cache_raw_val(prod_value_ref));
+          base_lhs.assign(odi_map_t::object_cache_raw_val(prod_value_ref),
+                          base_rhs);
+          base_rhs.forget(odi_map_t::object_cache_raw_val(prod_value_ref));
+        }
         std::shared_ptr<usymb_t> t_ptr =
             odi_map_t::object_eq_raw_val(prod_value_ref).get(rhs_rgn);
         if (t_ptr) {
@@ -2862,10 +2868,10 @@ public:
                                                  std::move(prod_value_ref)));
     }
 
-    CRAB_LOG("object", crab::outs()
-                           << "After region_copy(" << lhs_rgn << ":"
-                           << lhs_rgn.get_type() << "," << rhs_rgn << ":"
-                           << rhs_rgn.get_type() << ")=" << *this << "\n";);
+    CRAB_LOG("object-region-copy",
+             crab::outs() << "After region_copy(" << lhs_rgn << ":"
+                          << lhs_rgn.get_type() << "," << rhs_rgn << ":"
+                          << rhs_rgn.get_type() << ")=" << *this << "\n";);
   }
 
   // Cast between regions of different types
@@ -3445,36 +3451,42 @@ public:
       const variable_vector_t &flds_to_forget = kv.second;
       variable_vector_t obj_flds;
       get_obj_flds(id, obj_flds);
-      // retrieve an abstract object info
-      const odi_domain_product_t *prod_ref = m_odi_map.find(id);
-      if (!prod_ref) {
-        continue;
-      }
-      object_info_t prod_info_ref = odi_map_t::object_info_val(*prod_ref);
-      const small_range &num_refs = prod_info_ref.refcount_val();
-      object_value_t prod_value_ref = odi_map_t::object_odi_val(*prod_ref);
-      if (num_refs.is_one() &&
-          crab_domain_params_man::get()
-              .singletons_in_base()) { // singleton object in the base
-        non_odi_vars.insert(non_odi_vars.end(), flds_to_forget.begin(),
-                            flds_to_forget.end());
-      } else { // use odi map
-        // forget field(s)
-        for (auto v : flds_to_forget) {
-          m_ghost_var_num_man.forget(
-              v, odi_map_t::object_sum_raw_val(prod_value_ref));
-          m_ghost_var_num_man.forget(
-              v, odi_map_t::object_cache_raw_val(prod_value_ref));
-          m_ghost_var_eq_man.forget(
-              v, odi_map_t::object_eq_raw_val(prod_value_ref));
-          if (auto v_w = get_write_region(v)) {
+      if (obj_flds.size() == flds_to_forget.size()) {
+        // if forget all fields, forget this object
+        m_odi_map -= id;
+      } else {
+        // retrieve an abstract object info
+        const odi_domain_product_t *prod_ref = m_odi_map.find(id);
+        if (!prod_ref) {
+          continue;
+        }
+        object_info_t prod_info_ref = odi_map_t::object_info_val(*prod_ref);
+        const small_range &num_refs = prod_info_ref.refcount_val();
+        object_value_t prod_value_ref = odi_map_t::object_odi_val(*prod_ref);
+        if (num_refs.is_one() &&
+            crab_domain_params_man::get()
+                .singletons_in_base()) { // singleton object in the base
+          non_odi_vars.insert(non_odi_vars.end(), flds_to_forget.begin(),
+                              flds_to_forget.end());
+        } else if (obj_flds.size() !=
+                   flds_to_forget.size()) { // non-singleton object
+          // partially forget field(s)
+          for (auto v : flds_to_forget) {
+            m_ghost_var_num_man.forget(
+                v, odi_map_t::object_sum_raw_val(prod_value_ref));
+            m_ghost_var_num_man.forget(
+                v, odi_map_t::object_cache_raw_val(prod_value_ref));
             m_ghost_var_eq_man.forget(
-                *v_w, odi_map_t::object_eq_raw_val(prod_value_ref));
+                v, odi_map_t::object_eq_raw_val(prod_value_ref));
+            if (auto v_w = get_write_region(v)) {
+              m_ghost_var_eq_man.forget(
+                  *v_w, odi_map_t::object_eq_raw_val(prod_value_ref));
+            }
           }
         }
+        m_odi_map.set(id, odi_domain_product_t(std::move(prod_info_ref),
+                                               std::move(prod_value_ref)));
       }
-      m_odi_map.set(id, odi_domain_product_t(std::move(prod_info_ref),
-                                             std::move(prod_value_ref)));
     }
 
     // forget registers, references
@@ -4093,15 +4105,21 @@ public:
             dst_dom.get_or_insert_gvars(dst_rgns_no_unknown[i]);
         auto dst_rgn_eq_gvars =
             dst_dom.get_or_insert_eq_gvars(dst_rgns_no_unknown[i]);
-        dst_rgn_gvars.forget(odi_map_t::object_sum_raw_val(prod_value_ref));
-        dst_rgn_gvars.forget(odi_map_t::object_cache_raw_val(prod_value_ref));
-        dst_rgn_eq_gvars.forget(odi_map_t::object_eq_raw_val(prod_value_ref));
-        src_rgn_gvars_opt.value().expand(
-            odi_map_t::object_sum_raw_val(prod_value_ref), dst_rgn_gvars);
-        src_rgn_gvars_opt.value().expand(
-            odi_map_t::object_cache_raw_val(prod_value_ref), dst_rgn_gvars);
-        src_rgn_eq_gvars_opt.value().expand(
-            odi_map_t::object_eq_raw_val(prod_value_ref), dst_rgn_eq_gvars);
+        if (!odi_map_t::object_sum_raw_val(prod_value_ref).is_top()) {
+          dst_rgn_gvars.forget(odi_map_t::object_sum_raw_val(prod_value_ref));
+          src_rgn_gvars_opt.value().expand(
+              odi_map_t::object_sum_raw_val(prod_value_ref), dst_rgn_gvars);
+        }
+        if (!odi_map_t::object_cache_raw_val(prod_value_ref).is_top()) {
+          dst_rgn_gvars.forget(odi_map_t::object_cache_raw_val(prod_value_ref));
+          src_rgn_gvars_opt.value().expand(
+              odi_map_t::object_cache_raw_val(prod_value_ref), dst_rgn_gvars);
+        }
+        if (!odi_map_t::object_eq_raw_val(prod_value_ref).is_top()) {
+          dst_rgn_eq_gvars.forget(odi_map_t::object_eq_raw_val(prod_value_ref));
+          src_rgn_eq_gvars_opt.value().expand(
+              odi_map_t::object_eq_raw_val(prod_value_ref), dst_rgn_eq_gvars);
+        }
       }
       dst_dom.m_ghost_var_num_man.project(
           dst_rgns_no_unknown, odi_map_t::object_sum_raw_val(prod_value_ref));

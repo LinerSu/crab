@@ -5,6 +5,23 @@ using namespace crab::cfg;
 using namespace crab::cfg_impl;
 using namespace crab::domain_impl;
 using namespace ikos;
+#include <crab/domains/object/cow_domain_ref.hpp>
+
+struct FastDBMParams {
+  /* This version does not check for overflow */
+  enum { chrome_dijkstra = 1 };
+  enum { widen_restabilize = 1 };
+  enum { special_assign = 1 };
+  enum { close_bounds_inline = 0 };
+  using Wt = int64_t;
+  using graph_t = crab::AdaptGraph<Wt>;
+};
+
+using test_split_dbm_domain_t =
+    crab::domains::split_dbm_domain<z_number, varname_t, FastDBMParams>;
+using split_dbm_domain_ref_t =
+    crab::domains::object_domain_impl::abstract_domain_ref<
+        typename test_split_dbm_domain_t::variable_t, test_split_dbm_domain_t>;
 
 int main(int argc, char **argv) {
   bool stats_enabled = false;
@@ -178,6 +195,15 @@ int main(int argc, char **argv) {
     
   }
 
-  
+  { // widen
+    split_dbm_domain_ref_t s1;
+    z_var x(vfac["x"], crab::INT_TYPE, 32);
+    s1.assign(x, -1);
+    split_dbm_domain_ref_t s2;
+    s2.assign(x, -1);
+    split_dbm_domain_ref_t res = s1 || s2;
+    crab::outs() << "Widen of " << s1 << " and " << s2 << "=" << res << "\n";
+  }
+
   return 0;
 }
