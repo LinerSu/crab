@@ -796,12 +796,12 @@ public:
 
   this_domain_t operator||(const this_domain_t &e) const override {
     SVEQ_DOMAIN_SCOPED_STATS(".widening");
-    return *this;
+    return this->operator|(e);
   }
 
   this_domain_t operator&&(const this_domain_t &e) const override {
     SVEQ_DOMAIN_SCOPED_STATS(".narrowing");
-    return *this;
+    return this->operator&(e);
   }
 
   this_domain_t

@@ -1863,7 +1863,7 @@ public:
     OBJECT_DOMAIN_SCOPED_STATS(".leq");
 
     CRAB_LOG("object-leq", crab::outs() << "Inclusion test:\n\t" << *this
-                                        << "\n\t" << o << "\n";);
+                                        << "\n<=\n\t" << o << "\n";);
     if (is_bottom() || o.is_top()) {
       CRAB_LOG("object-leq", crab::outs() << "Result1=1\n";);
       return true;
@@ -4061,11 +4061,10 @@ public:
     // precondition: the rgns from source is formed as some abstract object
     obj_id_t src_id = src_dom.get_obj_id_or_fail(src_rgns_no_unknown[0]);
     auto dst_id_opt = dst_dom.get_obj_id(dst_rgns_no_unknown[0]);
-    if (dst_id_opt == boost::none) {
-      dst_id_opt = dst_dom.create_new_obj_id(dst_rgns_no_unknown[0]);
-      for (auto fld : dst_rgns) {
-        dst_dom.update_fields_id_map(fld, *dst_id_opt);
-      }
+    dst_id_opt = dst_id_opt ? *dst_id_opt
+                            : dst_dom.create_new_obj_id(dst_rgns_no_unknown[0]);
+    for (auto fld : dst_rgns) {
+      dst_dom.update_fields_id_map(fld, *dst_id_opt);
     }
     const odi_domain_product_t *prod_ref = src_dom.m_odi_map.find(src_id);
     if (!prod_ref) {
@@ -4151,6 +4150,9 @@ public:
                                     << "Compute the entry state at callsite "
                                     << callsite.get_function()
                                     << ". Caller: " << caller_dom << "\n";);
+    // if (callsite.get_function() == "httpd_start_request") {
+    //   crab::CrabEnableVerbosity(5);
+    // }
 
     auto rgn_in_group = [](const variable_t &rgn,
                            const classes_t &cls) -> bool {
