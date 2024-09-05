@@ -414,21 +414,38 @@ private:
 
   /// @brief A special class to operator \subseteq when merging two trees
   class inclusion_test_op : public partial_order_t {
+  private:
+    const odi_map_domain_t &m_l_odi_map;
+    const odi_map_domain_t &m_r_odi_map;
+
+  protected:
     virtual bool leq(const map_value_t &x, const map_value_t &y) override {
       if (x == y) {
         return true;
       }
       const odi_info_t &l_obj_info = x->first();
-      const odi_value_t &l_odi_val = x->second();
+      const odi_value_t &c_l_odi_val = x->second();
+      const small_range &l_num_refs = l_obj_info.refcount_val();
       const odi_info_t &r_obj_info = y->first();
-      const odi_value_t &r_odi_val = y->second();
-      bool res = l_obj_info <= r_obj_info;
+      const odi_value_t &c_r_odi_val = y->second();
+      const small_range &r_num_refs = r_obj_info.refcount_val();
+      //
+      odi_value_t l_odi_val = odi_value_t(c_l_odi_val);
+      odi_value_t r_odi_val = odi_value_t(c_r_odi_val);
+      m_l_odi_map.commit_cache_if_dirty(l_obj_info, l_odi_val);
+      m_r_odi_map.commit_cache_if_dirty(r_obj_info, r_odi_val);
+      bool res = l_num_refs <= r_num_refs;
       res &= l_odi_val.first() <= r_odi_val.first();
       res &= l_odi_val.second().first() <= r_odi_val.second().first();
       return res;
     }
 
     virtual bool default_is_top() override { return true; }
+
+  public:
+    inclusion_test_op(const odi_map_domain_t &left,
+                      const odi_map_domain_t &right)
+        : m_l_odi_map(left), m_r_odi_map(right) {}
   }; // class inclusion_test_op
 
   /// @brief apply operation when merge two trees
@@ -517,7 +534,7 @@ public:
     } else if (is_top() || o.is_bottom()) {
       return false;
     } else {
-      inclusion_test_op leq_op;
+      inclusion_test_op leq_op(*this, o);
       return m_odi_map.leq(o.m_odi_map, leq_op);
     }
   }
@@ -755,7 +772,7 @@ public:
   /// @brief update odi map by a new <obj_id, <info, value>>
   /// @param key object id
   /// @param v the new value by a product of <info, value>
-  void set(const key_t &key, map_raw_value_t &&v) {
+  void set(const key_t &key, const map_raw_value_t &v) {
     ODI_DOMAIN_SCOPED_STATS(".set");
     if (!is_bottom()) {
       if (v.is_bottom()) {
@@ -763,7 +780,7 @@ public:
       } else if (v.is_top()) {
         m_odi_map.remove(key);
       } else {
-        map_value_t v_ptr = std::make_shared<map_raw_value_t>(std::move(v));
+        map_value_t v_ptr = std::make_shared<map_raw_value_t>(v);
         m_odi_map.insert(key, v_ptr);
       }
     }

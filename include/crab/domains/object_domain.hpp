@@ -1981,7 +1981,7 @@ public:
   object_domain_t
   widening_thresholds(const object_domain_t &o,
                       const thresholds<number_t> &thresholds) const override {
-    OBJECT_DOMAIN_SCOPED_STATS(".widening");
+    OBJECT_DOMAIN_SCOPED_STATS(".widening.thresholds");
 
     // Trivial cases first: we don't cover cases where one operand is
     // top because is_top() calls the base domain which we don't know
@@ -3925,7 +3925,7 @@ public:
         // indicate which object needs to commit
         input_vars.push_back(inputs[i].get_variable());
       }
-      copy_object(input_vars, outputs, *this, *this);
+      object_copy(input_vars, outputs, *this, *this);
     }
   }
 
@@ -4027,7 +4027,7 @@ public:
   /// @param[in] dst_rgns a set of regions from dst dsa node
   /// @param[in] src_dom the source abstract state
   /// @param[in,out] dst_dom the destinated abstract state
-  void copy_object(const equiv_class_regions_t &src_rgns,
+  void object_copy(const equiv_class_regions_t &src_rgns,
                    const equiv_class_regions_t &dst_rgns,
                    const object_domain_t &src_dom,
                    object_domain_t &dst_dom) const {
@@ -4224,7 +4224,7 @@ public:
     for (unsigned i = 0, len = callee_formal_cls.size(); i < len; ++i) {
       const equiv_class_regions_t &formal_rgns = callee_formal_cls[i];
       const equiv_class_regions_t &actual_rgns = caller_actual_cls[i];
-      copy_object(actual_rgns, formal_rgns, caller_dom, caller);
+      object_copy(actual_rgns, formal_rgns, caller_dom, caller);
     }
     CRAB_LOG("inter-restrict",
              crab::outs() << "Inv after formal/actual unification: " << caller
@@ -4389,7 +4389,7 @@ public:
     for (unsigned i = 0, len = caller_lhs_cls.size(); i < len; ++i) {
       const equiv_class_regions_t &lhs_rgns = caller_lhs_cls[i];
       const equiv_class_regions_t &ret_rgns = callee_ret_cls[i];
-      copy_object(ret_rgns, lhs_rgns, callee_at_exit, *this);
+      object_copy(ret_rgns, lhs_rgns, callee_at_exit, *this);
     }
 
     // unify in objects in case (3)
@@ -4397,7 +4397,7 @@ public:
       if (cls_check[i]) {
         const equiv_class_regions_t &formal_rgns = callee_formal_cls[i];
         const equiv_class_regions_t &actual_rgns = caller_actual_cls[i];
-        copy_object(formal_rgns, actual_rgns, callee_at_exit, *this);
+        object_copy(formal_rgns, actual_rgns, callee_at_exit, *this);
       }
     }
 
