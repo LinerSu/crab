@@ -2867,6 +2867,44 @@ public:
     return {g.size(), g.num_edges()};
   }
 
+  std::vector<variable_t> vars() const {
+    std::vector<variable_t> res;
+    res.reserve(vert_map.size());
+    for (const auto &p : vert_map) {
+      res.push_back(p.first);
+    }
+    return res;
+  }
+
+  boost::optional<number_t> difference_bound(const variable_t &a,
+                                             const variable_t &b) const {
+    if (a == b) {
+      return number_t(0);
+    }
+    boost::optional<vert_id> ai = get_vert(a);
+    boost::optional<vert_id> bi = get_vert(b);
+    if (!ai || !bi) { // not found
+      return boost::optional<number_t>();
+    }
+    SubGraph<graph_t> g_excl(g, 0);
+    if (g_excl.elem(*ai, *bi) && g_excl.elem(*bi, *ai) &&
+        g_excl.edge_val(*ai, *bi) == Wt(0) &&
+        g_excl.edge_val(*bi, *ai) == Wt(0)) {
+      return number_t(0);
+    } else if (g_excl.elem(*ai, *bi)) {
+      return number_t(g_excl.edge_val(*ai, *bi));
+    } else if (g_excl.elem(*bi, *ai)) {
+      // this is for b - a case not a - b case.
+      return boost::optional<number_t>();
+    } else {
+      return boost::optional<number_t>();
+    }
+  }
+
+  bool exists(const variable_t &x) const {
+    return vert_map.find(x) != vert_map.end();
+  }
+
   std::string domain_name() const override { return "SplitDBM"; }
 }; // class split_dbm_domain
 

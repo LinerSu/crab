@@ -72,6 +72,15 @@ private:
     m_name->append(other_name);
     m_name->append(suffix);
   }
+  indexed_varname(ikos::index_t id, variable_factory_t *vfac,
+                  const std::string &prefix, const indexed_varname &other)
+      : m_s(boost::none), m_id(id), m_name(std::make_shared<std::string>()),
+        m_vfac(vfac) {
+    std::string other_name(other.str());
+    m_name->reserve(other_name.size() + prefix.size() + 1);
+    m_name->append(prefix);
+    m_name->append(other_name);
+  }
   // fourth constructor: T varname
   indexed_varname(T s, ikos::index_t id, variable_factory_t *vfac)
       : m_s(s),
@@ -179,6 +188,9 @@ namespace var_factory_impl {
 template <class T> class variable_factory {
   using variable_factory_t = variable_factory<T>;
   using t_map_t = std::unordered_map<T, indexed_varname<T>>;
+  using reverse_map_t =
+      std::unordered_map<indexed_varname<T>,
+                         std::pair<indexed_varname<T>, unsigned>>;
   using shadow_map_t =
       std::unordered_map<indexed_varname<T>,
                          std::map<std::string, indexed_varname<T>>>;
@@ -188,6 +200,8 @@ template <class T> class variable_factory {
   t_map_t m_map;
   // (cached) non-T varname
   shadow_map_t m_shadow_map;
+  // (cached) non-T varname.
+  reverse_map_t m_reverse_map;
   // (non-cached) non-T varname.
   // REVISIT(PERFORMANCE): this was kept originally to tell Clam which
   // variables should be hidden when pretty printing invariants
@@ -263,7 +277,6 @@ public:
     return varname_t(get_and_increment_id(), this);
   }
 
- 
   // Create a fresh indexed_varname associated to var.
   // Given the same var and suffix it always return the same indexed_varname.
   // The returned indexed_varname's name is var's name concatenated with suffix.
@@ -288,7 +301,40 @@ public:
     }
   }
 
-  
+  virtual varname_t get_or_insert_varname(const varname_t &var,
+                                          const unsigned &coefficient) {
+    auto it = m_shadow_map.find(var);
+    std::string prefix = std::to_string(coefficient);
+    if (it == m_shadow_map.end()) {
+      varname_t iv(get_and_increment_id(), this, prefix, var);
+      std::map<std::string, varname_t> named_shadows;
+      named_shadows.insert({prefix, iv});
+      m_shadow_map.insert({var, std::move(named_shadows)});
+      m_reverse_map.insert({iv, {var, coefficient}});
+      return iv;
+    } else {
+      std::map<std::string, varname_t> &named_shadows = it->second;
+      auto nit = named_shadows.find(prefix);
+      if (nit != named_shadows.end()) {
+        return nit->second;
+      } else {
+        varname_t iv(get_and_increment_id(), this, prefix, var);
+        named_shadows.insert({prefix, iv});
+        m_reverse_map.insert({iv, {var, coefficient}});
+        return iv;
+      }
+    }
+  }
+
+  std::pair<varname_t, unsigned>
+  find_original_varname(const varname_t &var) const {
+    auto it = m_reverse_map.find(var);
+    if (it != m_reverse_map.end()) {
+      return it->second;
+    } else {
+      return {var, 1};
+    }
+  }
 
   // Allow temporary renaming for pretty-printing
   void add_renaming_map(
