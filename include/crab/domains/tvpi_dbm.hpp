@@ -267,7 +267,7 @@ private:
   }
   void ensure_exists() const {
     if (!m_map) {
-      throw std::runtime_error("shared map does not exist!");
+      CRAB_ERROR("shared map does not exist!");
     }
   }
   bool exists() const { return m_map != nullptr; }

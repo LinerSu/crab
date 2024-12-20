@@ -307,8 +307,8 @@ private:
   // but in subdomain like base domain, odi map,
   // we only keep array, integer or boolean variables
   // Details: https://github.com/seahorn/crab/wiki/IndexedNamesAndTypedVariables
-  ghost_var_num_man_t m_ghost_var_num_man;
-  ghost_var_eq_man_t m_ghost_var_eq_man;
+  mutable ghost_var_num_man_t m_ghost_var_num_man;
+  mutable ghost_var_eq_man_t m_ghost_var_eq_man;
 
   /* clang-format off */
   // Domain hierarchy:
@@ -3108,7 +3108,21 @@ public:
   void weak_assign(const variable_t &x, const linear_expression_t &e) override {
   }
 
-  bool entails(const linear_constraint_t &rhs) const override { return false; }
+  bool entails(const linear_constraint_t &rhs) const override {
+    if (is_bottom()) {
+      return true;
+    }
+
+    // REDUCTION: perform reduction
+    auto grhs = m_ghost_var_num_man.rename_linear_cst(rhs);
+    bool check = m_base_dom.entails(rhs);
+    if (check) {
+      return true;
+    }
+    object_domain_t copy(*this);
+    copy.apply_reduction_based_on_flags(true, false);
+    return copy.m_base_dom.entails(grhs);
+  }
 
   void weak_assign_bool_cst(const variable_t &lhs,
                             const linear_constraint_t &rhs) override {}

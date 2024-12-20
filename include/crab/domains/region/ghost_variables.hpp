@@ -160,15 +160,15 @@ public:
 		  // number of dereferenceable bytes
                   const ghost_variable_or_constant_t &byte_sz) const {
       // TODO: we don't check that m_offset >= 0
-      ghost_domain_t tmp(dom);
+      bool is_deref = false;
       if (byte_sz.is_constant()) {
-        tmp += ghost_linear_constraint_t(m_offset + byte_sz.get_constant() >
-                                         m_size);
+        is_deref = dom.entails(ghost_linear_constraint_t(
+            m_offset + byte_sz.get_constant() <= m_size));
       } else {
-        tmp += ghost_linear_constraint_t(m_offset + byte_sz.get_variable() >
-                                         m_size);
+        is_deref = dom.entails(ghost_linear_constraint_t(
+            m_offset + byte_sz.get_variable() <= m_size));
       }
-      return tmp.is_bottom();
+      return is_deref;
     }
 
     void expand(ghost_domain_t &dom, const ghost_offset_and_size &rhs) const {
