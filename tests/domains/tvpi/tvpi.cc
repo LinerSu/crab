@@ -16,13 +16,12 @@ z_cfg_t *prog1(variable_factory_t &vfac) {
     int N = nd_int();
     __CRAB_assume(N > 0);
     i = 0;
-    x = 0; 
+    x = 0;
     y = 0;
     while (i < N) {
       i++;
-      x' = x + 4;
-      x  = x'
-      y  = y + 8;
+      x = x + 4;
+      y = y + 8;
     }
     __CRAB_assert(x == 4*N ); // OK and provable by fixed_tvpi_domain
     __CRAB_assert(y == 8*N ); // OK and provable by fixed_tvpi_domain
@@ -31,8 +30,8 @@ z_cfg_t *prog1(variable_factory_t &vfac) {
   z_var i(vfac["i"], crab::INT_TYPE, 32);
   z_var x(vfac["x"], crab::INT_TYPE, 32);
   z_var y(vfac["y"], crab::INT_TYPE, 32);  
-  z_var x_next(vfac["x.next"], crab::INT_TYPE, 32);  
-  z_var n(vfac["n"], crab::INT_TYPE, 32);
+  z_var x_next(vfac["x.next"], crab::INT_TYPE, 32);
+  z_var n(vfac["N"], crab::INT_TYPE, 32);
   // entry and exit block
   auto cfg = new z_cfg_t("entry", "exit");
   // adding blocks
@@ -56,11 +55,11 @@ z_cfg_t *prog1(variable_factory_t &vfac) {
   loop_body.assume(z_lin_exp_t(i) < n);
   loop_exit.assume(z_lin_exp_t(i) >= n);
   loop_exit.assertion(x == 4*n);
-  loop_exit.assertion(y == 8*n);  
+  loop_exit.assertion(y == 8 * n);
+  loop_body.intrinsic("loop_counter", {}, {i});
   loop_body.add(i, i, 1);
-  loop_body.add(x_next, x, 4);
-  loop_body.add(y, y, 8);  
-  loop_body.assign(x, x_next);
+  loop_body.add(x, x, 4);
+  loop_body.add(y, y, 8);
 
   return cfg;
 }
@@ -117,7 +116,8 @@ z_cfg_t *prog2(variable_factory_t &vfac) {
   loop_body.assume(z_lin_exp_t(i) < n);
   loop_exit.assume(z_lin_exp_t(i) >= n);
   loop_exit.assertion(x >= 2*n);
-  loop_exit.assertion(x <= 3*n);  
+  loop_exit.assertion(x <= 3*n);
+  loop_body.intrinsic("loop_counter", {}, {i});
   loop_body.add(i, i, 1);
   loop_body_then.add(x, x, 2);
   loop_body_else.add(x, x, 3);
@@ -147,6 +147,7 @@ z_cfg_t *prog3(variable_factory_t &vfac) {
   z_var len(vfac["len"], crab::INT_TYPE, 32);
   z_var tsz(vfac["tsz"], crab::INT_TYPE, 32);
   z_var tmp(vfac["tmp"], crab::INT_TYPE, 32);
+  z_var tmp2(vfac["tmp2"], crab::INT_TYPE, 32);
   z_var i(vfac["i"], crab::INT_TYPE, 32);
   z_var idx(vfac["idx"], crab::INT_TYPE, 32);
   z_var offset(vfac["offset"], crab::INT_TYPE, 32);
@@ -171,15 +172,16 @@ z_cfg_t *prog3(variable_factory_t &vfac) {
   entry.assume(len <= 10);
   entry.havoc(tsz);
   entry.mul(tmp, len, isz);
-  entry.assume(z_lin_exp_t(tsz) >= tmp);
+  entry.assume(z_lin_exp_t(tsz) >= tmp); // tmp <= tsz, tmp = 4 * len
   entry.assign(i, 0);
-  loop_body.assume(z_lin_exp_t(i) < len);
-  loop_body.mul(idx, i, isz);
-  loop_body.add(offset, idx, isz);
+  loop_body.assume(z_lin_exp_t(i) < len); // i - len <= -1
+  loop_body.mul(idx, i, isz);             // idx - 4i <= 0 => idx - 4len <= -1
+  loop_body.add(offset, idx, isz);        // offset = idx + 4
   loop_body.assertion(z_lin_exp_t(offset) <= tsz);
   loop_body.add(i, i, 1);
   loop_exit.assume(z_lin_exp_t(i) >= len);
-  loop_exit.assertion(z_lin_exp_t(tsz) >= tmp);
+  loop_exit.mul(tmp2, len, isz);
+  loop_exit.assertion(z_lin_exp_t(tsz) >= tmp2);
   return cfg;
 }
 
@@ -193,17 +195,19 @@ int main (int argc, char** argv) {
     variable_factory_t vfac;
     z_cfg_t *cfg = prog1(vfac);
     crab::outs() << *cfg << "\n";
-    z_fixed_tvpi_domain_t init;
+    z_tvpi_dbm_domain_t init;
     // run(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     run_and_check(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     delete cfg;
   }
 
+  exit(0);
+
   {
     variable_factory_t vfac;
     z_cfg_t *cfg = prog2(vfac);
     crab::outs() << *cfg << "\n";
-    z_fixed_tvpi_domain_t init;
+    z_tvpi_dbm_domain_t init;
     run_and_check(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     delete cfg;
   }
@@ -212,7 +216,7 @@ int main (int argc, char** argv) {
     variable_factory_t vfac;
     z_cfg_t *cfg = prog3(vfac);
     crab::outs() << *cfg << "\n";
-    z_fixed_tvpi_domain_t init;
+    z_tvpi_dbm_domain_t init;
     run_and_check(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     delete cfg;
   }

@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
     z_number SZ = z_number(3);
     z_number SLICE = z_number(2);
 
-    z_fixed_tvpi_domain_t dom;
+    test_domain_t dom;
     // 0 <= i <= 6
     dom += (i >= z_number(0));
     dom += (i <= z_number(6));
@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
     dom += (x == SZ * j);
     // y == 2 * i
     dom += (y == SLICE * i);
-    crab::outs() << dom << "\n";
+    crab::outs() << "dom=" << dom << "\n";
 
     // assert(y <= x)? ==> 2 * i <= 3 * j?
     bool check = dom.entails(y <= x);
@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
     z_number SZ = z_number(3);
     z_number SLICE = z_number(2);
 
-    z_fixed_tvpi_domain_t dom;
+    test_domain_t dom;
     // 0 <= i <= 6
     dom += (i >= z_number(0));
     dom += (i <= z_number(6));
@@ -89,7 +89,7 @@ int main(int argc, char **argv) {
     z_number OFFSET = z_number(2);
     z_number SLICE = z_number(2);
 
-    z_fixed_tvpi_domain_t dom;
+    test_domain_t dom;
     // 0 <= i <= 4
     dom += (i >= z_number(0));
     dom += (i <= z_number(4));
@@ -125,9 +125,9 @@ int main(int argc, char **argv) {
     idx += 1;
   }
 
-  {
+  { // test 4
     crab::outs() << "\n\n---- case "<<idx<<"----\n\n";
-    z_fixed_tvpi_domain_t dom1, dom2;
+    test_domain_t dom1, dom2;
     // i == 4
     dom1 += (i == z_number(4));
     dom2 += (i == z_number(4));
@@ -138,7 +138,7 @@ int main(int argc, char **argv) {
     dom2 += (x == 3 * i);
 
     crab::outs() << "dom1: "<< dom1  << "\n";
-    crab::outs() << "dom2: "<< dom1  << "\n";
+    crab::outs() << "dom2: " << dom2 << "\n";
 
     auto dom3 = (dom1 | dom2);
 
@@ -154,52 +154,49 @@ int main(int argc, char **argv) {
     idx += 1;
   }
 
-  {
+  { // test 5
     crab::outs() << "\n\n---- case "<<idx<<"----\n\n";
-    z_fixed_tvpi_domain_t dom, dom1, dom2;
-    dom += (n >= z_number(1));
-    dom += (i == z_number(0));
-    dom += (i <= n);
-    dom += (x == z_number(0));
-    crab::outs() << "init: \n\t" << dom << "\n";
+    // Check if x = x + 2 join x = x + 3 works
+    test_domain_t dom1, dom2, dom3;
+    // dom1 : x = 0, i = 0
+    dom1 += (x == z_number(0));
+    dom1 += (i == z_number(0));
 
+    // dom2:
+    dom2 = dom1;
+    //  crab_intrinsic(loop_counter,i:int32);
+    //  i = i+1;
+    dom2.intrinsic("loop_counter", {i}, {});
+    dom2.apply(OP_ADDITION, i, i, z_number(1));
 
-    int count = 0;
-    while(count < 3) {
-      dom += (i <= n);
-      crab::outs() << "entry node: \n\t" << dom << "\n";
-      dom1 = dom;
-      dom2 = dom;
+    crab::outs() << "Dom2 adds a loop counter " << i << "\n";
 
-      dom1.assign(i, i + z_number(1));
-      // dom1.apply(OP_ADDITION, i, i, z_number(1));
-      dom2.apply(OP_ADDITION, i, i, z_number(1));
+    // dom3:
+    dom3 = dom2;
+    //  crab_intrinsic(loop_counter,i:int32);
+    //  i = i+1;
+    //  dom2 for x = x+3;
+    //  dom3 for x = x+2;
 
-      dom1.apply(OP_ADDITION, x, x, z_number(2));
-      crab::outs() << "x := x + 2\n\t" << dom1 << "\n";
+    //  dom2 : x = 3, i = 1, coeff_map = {i: 3}
+    //  dom3 : x = 2, i = 1, coeff_map = {i: 2}
+    dom2.apply(OP_ADDITION, x, x, z_number(3));
+    dom3.apply(OP_ADDITION, x, x, z_number(2));
 
-      dom1.apply(OP_ADDITION, x, x, z_number(3));
-      crab::outs() << "x := x + 3\n\t" << dom2 << "\n";
-      dom1 |= dom2;
-      crab::outs() << "After Join: \n\t" << dom1 << "\n";
-      if (count == 2) {
-        dom = dom || dom1;
-        crab::outs() << "Widen with entry: \n\t" << dom << "\n";
-      } else {
-        dom |= dom1;
-        crab::outs() << "Join with entry: \n\t" << dom << "\n";
-      }
-      count ++;
-    }
+    // Perform join
+    // LIMIT: join will lost coefficients for i
+    test_domain_t dom4 = dom2 | dom3;
+    crab::outs() << "Dom4 = Dom2 | Dom3 = " << dom4 << "\n";
 
-    dom += (i > n);
-    crab::outs() << "i > n\n\t" << dom << "\n";
+    // Perform widening
+    test_domain_t dom5 = dom1 || (dom1 | dom4);
+    crab::outs() << "Dom5 = Dom1 || (Dom1 | Dom4) = " << dom5 << "\n";
 
-    bool check = dom.entails(x >= 2 * n);
-    crab::outs() << "assert(x >= 2 * n): \n\t" << (check ? "true" : "false") << "\n";
-    check = dom.entails(x <= 3 * n);
-    crab::outs() << "assert(x <= 3 * n): \n\t" << (check ? "true" : "false") << "\n";
-    idx += 1;
+    // Check <= order
+    bool r1 = dom1 <= dom5;
+    crab::outs() << "Dom1 <= Dom5 = " << (r1 ? "true" : "false") << "\n";
+    idx++;
   }
+
   return 0;
 }

@@ -8,25 +8,23 @@ using namespace crab::cfg_impl;
 using namespace crab::domain_impl;
 using namespace ikos;
 
-using z_fixed_tvpi_domain_t = fixed_tvpi_domain<z_sdbm_domain_t>;  
-
 z_cfg_t *prog1(variable_factory_t &vfac) {
 
   /*
     int x = nd_int();
     int y = 2 * x;
     int z = nd_int();
-    int z2 = 2 * z;
+    int k = 2 * z;
 
     __CRAB_assert(z - x >= 3);   // EXPECTED OK
     __CRAB_assert(y == 2 * x);   // EXPECTED OK
-    __CRAB_assert(z2 - y >= 6);  // EXPECTED OK
+    __CRAB_assert(k - y >= 6);  // EXPECTED OK
    */
   // Defining program variables
   z_var x(vfac["x"], crab::INT_TYPE, 32);
   z_var y(vfac["y"], crab::INT_TYPE, 32);
   z_var z(vfac["z"], crab::INT_TYPE, 32);
-  z_var z2(vfac["z2"], crab::INT_TYPE, 32);
+  z_var k(vfac["k"], crab::INT_TYPE, 32);
   // entry and exit block
   auto cfg = new z_cfg_t("entry", "exit");
   // adding blocks
@@ -40,10 +38,10 @@ z_cfg_t *prog1(variable_factory_t &vfac) {
   entry.havoc(x);
   entry.mul(y, x, 2);
   entry.havoc(z);
-  entry.mul(z2, z, 2);
+  entry.mul(k, z, 2);
   header_1.assume(z - x >= 3);
   exit.assertion(y == 2 * x);
-  exit.assertion(z2 - y >= 6);
+  exit.assertion(k - y >= 6);
   exit.assertion(2*z - y >= 6);
 
   return cfg;
@@ -167,16 +165,19 @@ int main (int argc, char** argv) {
   {
     variable_factory_t vfac;
     z_cfg_t *cfg = prog1(vfac);
-    z_fixed_tvpi_domain_t init;
+    crab::outs() << *cfg << "\n";
+    z_tvpi_dbm_domain_t init;
     // run(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     run_and_check(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     delete cfg;
   }
+  exit(0);
 
   {
     variable_factory_t vfac;
     z_cfg_t *cfg = prog2(vfac);
-    z_fixed_tvpi_domain_t init;
+    crab::outs() << *cfg << "\n";
+    z_tvpi_dbm_domain_t init;
     // run(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     run_and_check(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     delete cfg;
@@ -185,7 +186,8 @@ int main (int argc, char** argv) {
   {
     variable_factory_t vfac;
     z_cfg_t *cfg = prog3(vfac);
-    z_fixed_tvpi_domain_t init;
+    crab::outs() << *cfg << "\n";
+    z_tvpi_dbm_domain_t init;
     // run(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     run_and_check(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     delete cfg;
