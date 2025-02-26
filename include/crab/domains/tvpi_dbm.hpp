@@ -8,6 +8,7 @@
 #include <crab/domains/abstract_domain.hpp>
 #include <crab/domains/abstract_domain_specialized_traits.hpp>
 #include <crab/domains/inter_abstract_operations.hpp>
+#include <crab/domains/tvpi/coefficient_map.hpp>
 #include <crab/numbers/bignums.hpp>
 #include <crab/support/debug.hpp>
 #include <crab/support/os.hpp>
@@ -19,475 +20,6 @@ namespace domains {
   CRAB_DOMAIN_SCOPED_STATS(this, NAME, 1)
 #define tvpi_dbm_domain_SCOPED_STATS_ASSIGN_CTOR(NAME)                         \
   CRAB_DOMAIN_SCOPED_STATS(&o, NAME, 0)
-
-namespace tvpi_utils {
-/// @brief a special log method to print vector
-/// @tparam TType
-/// @param o crab ostream
-/// @param vec the vector for printing
-template <typename TType>
-void print_vector(crab::crab_os &o, const std::vector<TType> &vec) {
-  typename std::vector<TType>::const_iterator it;
-  o << "[";
-  for (it = vec.begin(); it != vec.end(); it++) {
-    if (it != vec.begin())
-      o << ",";
-    o << (*it);
-  }
-  o << "]";
-}
-
-/// @brief a special method for find a value in a vector
-/// @tparam T a type of the vector item
-/// @param vec the vector for searching
-/// @param value the value for searching
-/// @return item if found; otherwise, boost::none
-template <typename T>
-boost::optional<T> find(const std::vector<T> &vec, const T &value) {
-  auto it = std::find(vec.begin(), vec.end(), value);
-  if (it != vec.end()) {
-    return *it;
-  } else {
-    return boost::none;
-  }
-}
-
-/// @brief compute gcd value by two unsigned ints
-/// @tparam T a type of the number, we used unsigned int only
-/// @param a unsigned int
-/// @param b unsigned int
-/// @return the gcd value; if a or b is 0, return another value
-template <typename T> T gcd(T a, T b) {
-  // Continue until b becomes zero
-  while (b != 0) {
-    T temp = b;
-    b = a % b;
-    a = temp;
-  }
-  return a;
-}
-
-template <typename T> void intersect(std::set<T> &a, const std::set<T> &b) {
-  for (auto it = a.begin(); it != a.end();) {
-    if (b.find(*it) == b.end()) { // not found, remove
-      it = a.erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
-/**
- * @class coefficient_map
- * @brief A class template that manages a map of keys to sets of values.
- *
- * This class provides a map where each key is associated with a set of values.
- * It supports insertion, merging, and various other operations on the map.
- *
- * @tparam key The type of the keys in the map.
- * @tparam value The type of the values in the sets.
- */
-template <typename key, typename value> class coefficient_map {
-  // This is an abstract domain for tracking coefficient set
-  // for each variable. The map is similar to separate domain where key is
-  // variable and value is a set of coefficients.
-  /* clang-format off */
-  // Domain hierarchy:
-  // For each coefficient set U, the lattice diagram is:
-  //               top : a special case for top
-  //              /   \
-  //           ...    ...
-  //           {a,b,c,d,e,...}
-  //            /   |   \
-  //       {a,b,c,d} ... {b,c,d,e}
-  //          /  \         /   \
-  //       {a,b} ...     {d,e} ...
-  //       /  \           /  \
-  //      {a} {b}  {c}  {d} {e}
-  //       ...  \   |   /    ...
-  //               bot
-
-  // For coefficient map, the lattice diagram is:
-  //               top: { x: top, y: top }
-  //              /   \
-  //           ...    ...
-  //       {x: U_x, y: U_y}
-  //        /      \
-  //   {x: U_x} {y: U_y} ...
-  //       \       /     /
-  //           bot
-
-  /* clang-format on */
-  using key_t = key;
-  using value_t = value;
-  using key_value_t = std::pair<const key_t, value_t>;
-  using value_set_t = std::set<value_t>;
-  using key_value_set_t = std::pair<const key_t, value_set_t>;
-  using map_t = std::unordered_map<key_t, value_set_t>;
-  using const_iterator_t = typename map_t::const_iterator;
-  using iterator_t = typename map_t::iterator;
-  using shared_map_t = std::shared_ptr<map_t>;
-  enum class lattice_val { bottom, top, neither_top_nor_bot };
-
-public:
-  using coefficient_map_t = coefficient_map<key, value>;
-  using coefficient_set_t = value_set_t;
-
-  coefficient_map() : m_map(nullptr), m_val(lattice_val::neither_top_nor_bot) {}
-  coefficient_map(const coefficient_map_t &o) = default;
-  coefficient_map(coefficient_map_t &&o) = default;
-  coefficient_map_t &operator=(const coefficient_map_t &o) = default;
-  coefficient_map_t &operator=(coefficient_map_t &&o) = default;
-
-  /**
-   * @brief Returns map is empty of not.
-   * @return true if map is not exist or empty.
-   */
-  bool empty() const { return !exists() || m_map->empty(); }
-
-  void clear() {
-    if (exists() && m_map.unique()) {
-      m_map->clear();
-    }
-    m_map = nullptr;
-  }
-
-  bool is_bottom() const { return m_val == lattice_val::bottom; }
-
-  void set_to_bottom() {
-    clear();
-    m_val = lattice_val::bottom;
-  }
-
-  bool is_top() const { return m_val == lattice_val::top; }
-
-  void set_to_top() {
-    clear();
-    m_val = lattice_val::top;
-  }
-
-  /**
-   * @brief Inserts a key-value pair into the map.
-   * @param kv The key-value pair to insert.
-   */
-  void insert(const key_value_t &kv) {
-    ensure_exists();
-    ensure_unique();
-    auto &m = *m_map;
-    auto it = m.find(kv.first);
-    if (it != m.end()) {
-      it->second.insert(kv.second);
-    } else {
-      m.insert({kv.first, {kv.second}});
-    }
-  }
-
-  /**
-   * @brief Inserts a key-value pair into the map using move semantics.
-   * @param kv The key-value pair to insert.
-   */
-  void insert(key_value_t &&kv) {
-    ensure_exists();
-    ensure_unique();
-    auto &m = *m_map;
-    auto it = m.find(kv.first);
-    if (it != m.end()) {
-      it->second.insert(std::forward<key_value_t>(kv).second);
-    } else {
-      m.insert({std::forward<key_value_t>(kv).first,
-                {std::forward<key_value_t>(kv).second}});
-    }
-  }
-
-  /**
-   * @brief Inserts a key and its associated set of values into the map.
-   * @param kvs The key and its associated set of values to insert.
-   */
-  void insert(const key_value_set_t &kvs) {
-    ensure_exists();
-    ensure_unique();
-    auto &m = *m_map;
-    auto it = m.find(kvs.first);
-    if (it != m.end()) {
-      it->second.insert(kvs.second.begin(), kvs.second.end());
-    } else {
-      m.insert(kvs);
-    }
-  }
-
-  /**
-   * @brief Inserts a key and its associated set of values into the map using
-   * move semantics.
-   * @param kvs The key and its associated set of values to insert.
-   */
-  void insert(key_value_set_t &&kvs) {
-    ensure_exists();
-    ensure_unique();
-    auto &m = *m_map;
-    auto it = m.find(kvs.first);
-    if (it != m.end()) {
-      it->second.insert(std::make_move_iterator(kvs.second.begin()),
-                        std::make_move_iterator(kvs.second.end()));
-    } else {
-      m.insert(std::move(kvs));
-    }
-  }
-
-  /**
-   * @brief Finds a key in the map.
-   * @param k The key to find.
-   * @return A constant iterator to the key-value pair if found, otherwise
-   * end().
-   */
-  const_iterator_t find(const key_t &k) const {
-    ensure_exists();
-    return m_map->find(k);
-  }
-
-  /**
-   * @brief Finds a key in the map.
-   * @param k The key to find.
-   * @return An iterator to the key-value pair if found, otherwise end().
-   */
-  iterator_t find(const key_t &k) {
-    ensure_exists();
-    ensure_unique();
-    return m_map->find(k);
-  }
-
-  /**
-   * @brief Returns a constant iterator to the beginning of the map.
-   * @return A constant iterator to the beginning of the map.
-   */
-  const_iterator_t begin() const {
-    ensure_exists();
-    return m_map->begin();
-  }
-
-  /**
-   * @brief Returns an iterator to the beginning of the map.
-   * @return An iterator to the beginning of the map.
-   */
-  iterator_t begin() {
-    ensure_exists();
-    ensure_unique();
-    return m_map->begin();
-  }
-
-  /**
-   * @brief Returns a constant iterator to the end of the map.
-   * @return A constant iterator to the end of the map.
-   */
-  const_iterator_t end() const {
-    ensure_exists();
-    return m_map->end();
-  }
-
-  /**
-   * @brief Returns an iterator to the end of the map.
-   * @return An iterator to the end of the map.
-   */
-  iterator_t end() {
-    ensure_exists();
-    ensure_unique();
-    return m_map->end();
-  }
-
-  void remove(const key_t &k) {
-    if (!exists() || m_map->find(k) == m_map->end()) {
-      return;
-    }
-    ensure_unique();
-    m_map->erase(k);
-  }
-
-  void keep(const std::vector<key_t> &keys) {
-    if (!exists()) {
-      return;
-    }
-    ensure_unique();
-    for (auto it = m_map->begin(); it != m_map->end();) {
-      if (tvpi_utils::find(keys, it->first)) { // keep key if found
-        ++it;
-      } else { // remove
-        it = m_map->erase(it);
-      }
-    }
-  }
-
-  /**
-   * @brief Merges another coefficient_map by inserting missing key value pair
-   * from another map.
-   * @param o The coefficient_map to merge from.
-   */
-  void unions(const coefficient_map_t &o) {
-    if (!exists()) { // current is uninitialized, make it initialized
-      if (o.exists()) {
-        m_map = std::make_shared<map_t>(*o.m_map);
-        ;
-      }
-      return;
-    }
-    if (!o.exists()) {
-      return;
-    }
-
-    if (m_map == o.m_map) { // if they are the same, ignore
-      return;
-    }
-
-    ensure_unique();
-
-    for (auto it = o.begin(), et = o.end(); it != et; ++it) {
-      const auto &k = it->first;
-      insert({k, it->second});
-    }
-  }
-
-  void meet(const coefficient_map_t &o) {
-    if (is_bottom() || o.is_top()) {
-      // do nothing
-    } else if (o.is_bottom() || is_top()) {
-      *this = o;
-    } else {
-      unions(o);
-    }
-  }
-
-  /**
-   * @brief Merges another coefficient_map by keep only the common key value
-   * pair from another map.
-   * @param o The coefficient_map to merge from.
-   */
-  void intersects(const coefficient_map_t &o) {
-    if (!exists()) { // current is uninitialized, make it initialized
-      if (o.exists()) {
-        m_map = std::make_shared<map_t>(*o.m_map);
-        ;
-      }
-      return;
-    }
-    if (!o.exists()) {
-      return;
-    }
-
-    if (m_map == o.m_map) { // if they are the same, ignore
-      return;
-    }
-
-    ensure_unique();
-
-    for (auto it = m_map->begin(), et = m_map->end(); it != et;) {
-      auto oit = o.find(it->first);
-      if (oit == o.end()) {
-        it = m_map->erase(it);
-      } else { // common key
-        intersect(it->second, oit->second);
-        if (it->second.empty()) {
-          it = m_map->erase(it);
-        } else {
-          ++it;
-        }
-      }
-    }
-  }
-
-  void join(const coefficient_map_t &o) {
-    if (is_bottom() || o.is_top()) {
-      *this = o;
-    } else if (o.is_bottom() || is_top()) {
-      // do nothing
-    } else {
-      intersects(o);
-    }
-  }
-
-  /**
-   * @brief Writes the map to an output stream.
-   * @param o The output stream to write to.
-   */
-  void write(crab_os &o) const {
-    if (is_bottom()) {
-      o << "_|_";
-    } else if (is_top()) {
-      o << "top";
-    } else if (!exists()) {
-      o << "not exists";
-      return;
-    } else {
-      auto &m = *m_map;
-      o << "{";
-      for (auto it = m.begin(), et = m.end(); it != et;) {
-        o << it->first << " => (";
-        for (auto sit = it->second.begin(), set = it->second.end();
-             sit != set;) {
-          o << *sit;
-          ++sit;
-          if (sit != set) {
-            o << ", ";
-          }
-        }
-        o << ")";
-        ++it;
-        if (it != et) {
-          o << ", ";
-        }
-      }
-      o << "}";
-    }
-  }
-
-  /**
-   * @brief Output stream operator for coefficient_map.
-   * @param o The output stream.
-   * @param m The coefficient_map to write.
-   * @return The output stream.
-   */
-  friend crab_os &operator<<(crab_os &o, const coefficient_map_t &m) {
-    m.write(o);
-    return o;
-  }
-
-private:
-  shared_map_t
-      m_map; // Shared pointer to the underlying map, enabling state sharing.
-  lattice_val m_val; // The lattice value to indicate the state of the map.
-
-  /**
-   * @brief Ensures that the map exists, creating it if necessary.
-   */
-  void ensure_exists() {
-    if (!m_map) {
-      m_map = std::make_shared<map_t>();
-    }
-  }
-
-  /**
-   * @brief Ensures that the map exists, throwing an error if it does not.
-   */
-  void ensure_exists() const {
-    if (!m_map) {
-      CRAB_ERROR("shared map does not exist!");
-    }
-  }
-
-  /**
-   * @brief Checks if the map exists.
-   * @return True if the map exists, false otherwise.
-   */
-  bool exists() const { return m_map != nullptr; }
-
-  /**
-   * @brief Ensures that the map is written when it is copied.
-   */
-  void ensure_unique() {
-    if (!m_map.unique()) {
-      m_map = std::make_shared<map_t>(*m_map);
-    }
-  }
-};
-
-} // namespace tvpi_utils
 
 class TVPIDBMDefaultParams {
 public:
@@ -564,6 +96,7 @@ public:
 private:
   using base_domain_t = OctLikeDomain;
   using coeff_map_t = std::unordered_map<variable_t, std::set<unsigned>>;
+  using bound_t = ikos::bound<number_t>;
 
   base_domain_t m_base_absval;
   base_domain_t m_ext_absval;
@@ -590,6 +123,12 @@ private:
     return coeff_v;
   }
 
+  variable_t get_original_var(const variable_t &v) {
+    auto &vfac = const_cast<varname_t *>(&(v.name()))->get_var_factory();
+    auto ret = vfac.find_original_varname(v.name());
+    return variable_t(ret.first, v.get_type());
+  }
+
   unsigned convert(const number_t &coefficient) const {
     if (!coefficient.fits_int64()) {
       CRAB_ERROR("Coefficient must be an 64 bit integer");
@@ -611,6 +150,8 @@ private:
       return boost::none;
     } else if (coefficient == 1) {
       return v;
+    } else if (m_coeff_map.empty()) {
+      return boost::none;
     } else {
       auto it = m_coeff_map.find(v);
       if (it != m_coeff_map.end()) {
@@ -777,6 +318,9 @@ private:
       }
     } else if (boost::optional<variable_t> y = e.get_variable()) {
       // rewrite("x := y") = "x * COEF := y * COEF"
+      if (find_ghost_var(*y, coefficient) == boost::none) {
+        return;
+      }
       variable_t ghost_y = get_ghost_var(*y, coefficient);
       if (!weak) {
         m_ext_absval.assign(ghost_x, ghost_y);
@@ -812,6 +356,10 @@ private:
                      const variable_t &y, number_t z, unsigned coefficient) {
     assert(coefficient > 1);
 
+    if (find_ghost_var(x, coefficient) == boost::none ||
+        find_ghost_var(y, coefficient) == boost::none) {
+      return;
+    }
     variable_t ghost_x = get_ghost_var(x, coefficient);
     variable_t ghost_y = get_ghost_var(y, coefficient);
     number_t tracked_coefficient(coefficient);
@@ -819,12 +367,12 @@ private:
     case OP_MULTIPLICATION:
     case OP_SDIV:
     case OP_UDIV: // x := y * z or x := y / z
-      // rewrite to x*COEF := y*COEF op z
+      // rewrite to x*COEF := y*COEF */div z
       m_ext_absval.apply(op, ghost_x, ghost_y, z);
       break;
     case OP_ADDITION:
     case OP_SUBTRACTION: // x := y + z or x := y - z
-      // rewrite to x*COEF := y*COEF op z*COEF
+      // rewrite to x*COEF := y*COEF +/- z*COEF
       m_ext_absval.apply(op, ghost_x, ghost_y, z * tracked_coefficient);
       break;
     default:
@@ -836,6 +384,11 @@ private:
                      const variable_t &y, const variable_t &z,
                      unsigned coefficient) {
     assert(coefficient > 1);
+    if (find_ghost_var(x, coefficient) == boost::none ||
+        find_ghost_var(y, coefficient) == boost::none ||
+        find_ghost_var(z, coefficient) == boost::none) {
+      return;
+    }
     // rewrite("x := y op z") = "x*COEF := y*COEF op z*COEF"
     variable_t ghost_x = get_ghost_var(x, coefficient);
     variable_t ghost_y = get_ghost_var(y, coefficient);
@@ -850,59 +403,48 @@ private:
     // tvpi_reduce();
   }
 
-public:
-  DEFAULT_SELECT(tvpi_dbm_domain_t)
-  BOOL_OPERATIONS_NOT_IMPLEMENTED(tvpi_dbm_domain_t)
-  ARRAY_OPERATIONS_NOT_IMPLEMENTED(tvpi_dbm_domain_t)
-  REGION_AND_REFERENCE_OPERATIONS_NOT_IMPLEMENTED(tvpi_dbm_domain_t)
-
-  tvpi_dbm_domain() {}
-
-  tvpi_dbm_domain(const tvpi_dbm_domain_t &o) = default;
-  tvpi_dbm_domain(tvpi_dbm_domain_t &&o) = default;
-  tvpi_dbm_domain_t &operator=(const tvpi_dbm_domain_t &o) = default;
-  tvpi_dbm_domain_t &operator=(tvpi_dbm_domain_t &&o) = default;
-
-  bool is_asc_phase() const override {
-    return m_base_absval.is_asc_phase() && m_ext_absval.is_asc_phase();
+  bool add_tvpi_constraint(const variable_t &ax, const variable_t &by,
+                           const number_t &c) {
+    // add ax - by <= c
+    auto oldcopt = m_ext_absval.difference_bound(by, ax);
+    if (!oldcopt || c < *oldcopt) { // if new bound is tighter
+      m_ext_absval += (ax - by <= c);
+      return false;
+    }
+    return true;
   }
 
-  void set_phase(bool is_ascending) override {
-    m_base_absval.set_phase(is_ascending);
-    m_ext_absval.set_phase(is_ascending);
+  bool add_utvpi_constraint(const variable_t &x, const variable_t &y,
+                            const number_t &c) {
+    // add x - y <= c
+    auto oldcopt = m_base_absval.difference_bound(y, x);
+    if (!oldcopt || c < *oldcopt) { // if new bound is tighter
+      m_base_absval += (x - y <= c);
+      return false;
+    }
+    return true;
   }
 
-  void set_to_top() override {
-    m_coeff_map.set_to_top();
-    m_base_absval.set_to_top();
-    m_ext_absval.set_to_top();
+  bool add_ub_constraint(const variable_t &x, const number_t &ub) {
+    // add x <= ub
+    bound_t x_ub = m_base_absval.at(x).ub();
+    bound_t new_ub = bound_t(ub);
+    if (new_ub < x_ub) { // if new bound is tighter
+      m_base_absval += (x <= ub);
+      return false;
+    }
+    return true;
   }
 
-  void set_to_bottom() override {
-    m_coeff_map.set_to_bottom();
-    m_base_absval.set_to_bottom();
-    m_ext_absval.set_to_bottom();
-  }
-
-  tvpi_dbm_domain_t make_bottom() const override {
-    tvpi_dbm_domain_t res;
-    res.set_to_bottom();
-    return res;
-  }
-
-  tvpi_dbm_domain_t make_top() const override {
-    tvpi_dbm_domain_t res;
-    return res;
-  }
-
-  bool is_bottom() const override {
-    return m_coeff_map.is_bottom() || m_base_absval.is_bottom() ||
-           m_ext_absval.is_bottom();
-  }
-
-  bool is_top() const override {
-    return m_coeff_map.is_top() && m_base_absval.is_top() &&
-           m_ext_absval.is_top();
+  bool add_lb_constraint(const variable_t &x, const number_t &lb) {
+    // add -x <= lb
+    bound_t x_lb = m_base_absval.at(x).lb();
+    bound_t new_lb = bound_t(-lb);
+    if (new_lb > x_lb) { // if new bound is tighter
+      m_base_absval += (-x <= lb);
+      return false;
+    }
+    return true;
   }
 
   std::pair<unsigned, number_t> normalize_tvpi(const unsigned &a,
@@ -1005,6 +547,61 @@ public:
     }
   }
 
+public:
+  DEFAULT_SELECT(tvpi_dbm_domain_t)
+  BOOL_OPERATIONS_NOT_IMPLEMENTED(tvpi_dbm_domain_t)
+  ARRAY_OPERATIONS_NOT_IMPLEMENTED(tvpi_dbm_domain_t)
+  REGION_AND_REFERENCE_OPERATIONS_NOT_IMPLEMENTED(tvpi_dbm_domain_t)
+
+  tvpi_dbm_domain() {}
+
+  tvpi_dbm_domain(const tvpi_dbm_domain_t &o) = default;
+  tvpi_dbm_domain(tvpi_dbm_domain_t &&o) = default;
+  tvpi_dbm_domain_t &operator=(const tvpi_dbm_domain_t &o) = default;
+  tvpi_dbm_domain_t &operator=(tvpi_dbm_domain_t &&o) = default;
+
+  bool is_asc_phase() const override {
+    return m_base_absval.is_asc_phase() && m_ext_absval.is_asc_phase();
+  }
+
+  void set_phase(bool is_ascending) override {
+    m_base_absval.set_phase(is_ascending);
+    m_ext_absval.set_phase(is_ascending);
+  }
+
+  void set_to_top() override {
+    m_coeff_map.set_to_top();
+    m_base_absval.set_to_top();
+    m_ext_absval.set_to_top();
+  }
+
+  void set_to_bottom() override {
+    m_coeff_map.set_to_bottom();
+    m_base_absval.set_to_bottom();
+    m_ext_absval.set_to_bottom();
+  }
+
+  tvpi_dbm_domain_t make_bottom() const override {
+    tvpi_dbm_domain_t res;
+    res.set_to_bottom();
+    return res;
+  }
+
+  tvpi_dbm_domain_t make_top() const override {
+    tvpi_dbm_domain_t res;
+    return res;
+  }
+
+  bool is_bottom() const override {
+    return m_coeff_map.is_bottom() || m_base_absval.is_bottom() ||
+           m_ext_absval.is_bottom();
+  }
+
+  bool is_top() const override {
+    return m_coeff_map.is_top() && m_base_absval.is_top() &&
+           m_ext_absval.is_top();
+  }
+
   void normalize_dbms() {
     // This is a top level function to normalize tvpi constraints.
     // However, we wish not to run this process in the end since we always keep
@@ -1077,13 +674,39 @@ public:
     }
 
     for (auto it = to_remove.begin(); it != to_remove.end();) {
-      if (tvpi_utils::find(base_vars, *it)) {
+      if (tvpi_utils::find(base_vars, *it) || tvpi_utils::find(ext_vars, *it)) {
         it = to_remove.erase(it);
       } else {
         ++it;
       }
     }
+    CRAB_LOG("tvpi-dbm-reduce2", crab::outs() << "Remove dimensions: ";
+             tvpi_utils::print_set(crab::outs(), to_remove);
+             crab::outs() << "\n";);
     m_ext_absval.forget(variable_vector_t(to_remove.begin(), to_remove.end()));
+  }
+
+  void prune_coefficients() {
+    // This function removes coefficients that current DBM lost those
+    // dimensions.
+    auto ext_vars = m_ext_absval.vars();
+    for (auto it = m_coeff_map.begin(); it != m_coeff_map.end();) {
+      const variable_t &x = it->first;
+      coefficient_set_t &a_coeffs = it->second;
+      for (auto ita = a_coeffs.begin(); ita != a_coeffs.end();) {
+        auto gax = get_ghost_var(x, *ita);
+        if (tvpi_utils::find(ext_vars, gax) == boost::none) {
+          ita = a_coeffs.erase(ita);
+        } else {
+          ++ita;
+        }
+      }
+      if (a_coeffs.empty()) {
+        it = m_coeff_map.erase(it);
+      } else {
+        ++it;
+      }
+    }
   }
 
   void tvpi_reduce() {
@@ -1104,19 +727,19 @@ public:
              tvpi_utils::print_vector(crab::outs(), base_vars);
              crab::outs() << "\n";);
     auto ext_vars = m_ext_absval.vars();
+    variable_vector_t allvars;
+    allvars.reserve(base_vars.size() + ext_vars.size());
+    allvars.insert(allvars.end(), base_vars.begin(), base_vars.end());
+    allvars.insert(allvars.end(), ext_vars.begin(), ext_vars.end());
     CRAB_LOG("tvpi-dbm-reduce2", crab::outs() << "extend dimensions: ";
              tvpi_utils::print_vector(crab::outs(), ext_vars);
              crab::outs() << "\n";);
-    auto e_set = std::set<variable_t>(base_vars.begin(), base_vars.end());
-    for (auto &v : base_vars) {
-      auto itc = m_coeff_map.find(v);
-      if (itc != m_coeff_map.end()) {
-        for (auto &c : itc->second) {
-          auto gv = get_ghost_var(v, c);
-          if (tvpi_utils::find(ext_vars, v)) {
-            e_set.insert(v);
-          }
-        }
+    auto e_set = std::unordered_set<variable_t>(allvars.begin(), allvars.end());
+    for (auto &v : allvars) {
+      auto ov = get_original_var(v);
+      if (ov != v) {
+        e_set.erase(v);
+        e_set.insert(ov);
       }
     }
     auto traverse_vars = variable_vector_t(e_set.begin(), e_set.end());
@@ -1167,31 +790,32 @@ public:
                   auto new_a = std::get<0>(ret);
                   auto new_b = std::get<1>(ret);
                   auto new_c = std::get<2>(ret);
-                  CRAB_LOG("tvpi-dbm-reduce2",
-                           crab::outs()
-                               << "=>>>" << new_a << "*" << x << "-" << new_b
-                               << "*" << z << "<=" << new_c << "\n");
+                  bool skip = true;
                   if (new_a == 0 && new_b == 0) {
                     if (new_c < 0) { // 0 <= c where c < 0, UNSAT
                       set_to_bottom();
                       return;
                     }
-                  } else if (new_a == 1 && new_b == 1) {
-                    m_base_absval += (x - z <= new_c);
-                  } else if (new_a == 1 && new_b == 0) {
-                    m_base_absval += (x <= new_c);
-                  } else if (new_a == 0 && new_b == 1) {
-                    m_base_absval += (-z <= new_c);
-                  } else {
+                  } else if (new_a == 1 && new_b == 1) { // x - z <= c'
+                    skip = add_utvpi_constraint(x, z, new_c);
+                  } else if (new_a == 1 && new_b == 0) { // x <= c'
+                    skip = add_ub_constraint(x, new_c);
+                  } else if (new_a == 0 && new_b == 1) { // -z <= c'
+                    skip = add_lb_constraint(z, new_c);
+                  } else { // a'x - b'z <= c' with a' > 1, b' > 1
                     if (find_ghost_var(x, new_a) && find_ghost_var(z, new_b)) {
                       auto gax_new = get_ghost_var(x, new_a);
                       auto gbz_new = get_ghost_var(z, new_b);
                       if (tvpi_utils::find(ext_vars, gax_new) &&
                           tvpi_utils::find(ext_vars, gbz_new)) {
-                        m_ext_absval += (gax_new - gbz_new <= new_c);
+                        skip = add_tvpi_constraint(gax_new, gbz_new, new_c);
                       }
                     }
                   }
+                  CRAB_LOG("tvpi-dbm-reduce2",
+                           crab::outs() << "=>>>" << new_a << "*" << x << "-"
+                                        << new_b << "*" << z << "<=" << new_c
+                                        << (skip ? ", skip" : "") << "\n");
                 }
                 // ax - by <= c && y <= f => x <= c'
                 auto bnds = m_base_absval.at(y);
@@ -1205,10 +829,11 @@ public:
                       resultant(a, x, b, y, *copt, 1, 1, boost::none, *fopt);
                   auto new_a = std::get<0>(ret);
                   auto new_c = std::get<2>(ret);
+                  bool skip = add_ub_constraint(x, new_c);
                   CRAB_LOG("tvpi-dbm-reduce2",
-                           crab::outs() << "=>>>" << new_a << "*" << x
-                                        << " <= " << new_c << "\n");
-                  m_base_absval += (x <= new_c);
+                           crab::outs()
+                               << "=>>>" << new_a << "*" << x << " <= " << new_c
+                               << (skip ? ", skip" : "") << "\n");
                 }
                 // ax - by <= c && -x <= f => -y <= c'
                 bnds = m_base_absval.at(x);
@@ -1222,16 +847,19 @@ public:
                       resultant(a, x, b, y, *copt, 1, boost::none, 1, (-*fopt));
                   auto new_b = std::get<1>(ret);
                   auto new_c = std::get<2>(ret);
-                  CRAB_LOG("tvpi-dbm-reduce2", crab::outs()
-                                                   << "=>>>"
-                                                   << "-" << new_b << "*" << y
-                                                   << " <= " << new_c << "\n");
-                  m_base_absval += (-y <= new_c);
+                  bool skip = add_lb_constraint(y, new_c);
+                  CRAB_LOG("tvpi-dbm-reduce2",
+                           crab::outs()
+                               << "=>>>"
+                               << "-" << new_b << "*" << y << " <= " << new_c
+                               << (skip ? ", skip" : "") << "\n");
                 }
               } else if (x != y && !(a == 1 && b == 1) && counter &&
                          (x == *counter || y == *counter)) {
                 // see whether we can recover this
                 // x <= c && -y <= f => ax - by <= c'
+                // Now, we skip lots of cases here since it will create many
+                // inequalities
                 auto bndsx = m_base_absval.at(x);
                 auto bndsy = m_base_absval.at(y);
                 if (bndsx.ub().is_finite() && bndsy.lb().is_finite()) {
@@ -1244,13 +872,15 @@ public:
                                  << "*" << *xub << ", -" << b << "*" << y
                                  << " <= -" << b << "*" << *ylb << ")\n");
                     number_t c_p = number_t(a) * (*xub) - number_t(b) * (*ylb);
+                    bool skip = add_tvpi_constraint(gax, gby, c_p);
                     CRAB_LOG("tvpi-dbm-reduce2",
-                             crab::outs() << "=>>>" << gax << "-" << gby
-                                          << " <= " << c_p << "\n");
-                    m_ext_absval += (gax - gby <= c_p);
+                             crab::outs()
+                                 << "=>>>" << gax << "-" << gby << " <= " << c_p
+                                 << (skip ? ", skip" : "") << "\n");
                   }
                 }
               }
+              // explore more cases
               copt = m_ext_absval.difference_bound(gax, gby);
               if (copt) {
                 for (auto &z : base_vars) {
@@ -1271,31 +901,32 @@ public:
                   auto new_a = std::get<0>(ret);
                   auto new_b = std::get<1>(ret);
                   auto new_c = std::get<2>(ret);
-                  CRAB_LOG("tvpi-dbm-reduce2",
-                           crab::outs()
-                               << "=>>>" << new_a << "*" << z << "-" << new_b
-                               << "*" << x << " <= " << new_c << "\n");
+                  bool skip = true;
                   if (new_a == 0 && new_b == 0) {
                     if (new_c < 0) { // 0 <= c where c < 0, UNSAT
                       set_to_bottom();
                       return;
                     }
-                  } else if (new_a == 1 && new_b == 1) {
-                    m_base_absval += (z - x <= new_c);
-                  } else if (new_a == 1 && new_b == 0) {
-                    m_base_absval += (z <= new_c);
-                  } else if (new_a == 0 && new_b == 1) {
-                    m_base_absval += (-x <= new_c);
-                  } else {
+                  } else if (new_a == 1 && new_b == 1) { // z - x <= c'
+                    skip = add_utvpi_constraint(z, x, new_c);
+                  } else if (new_a == 1 && new_b == 0) { // z <= c'
+                    skip = add_ub_constraint(z, new_c);
+                  } else if (new_a == 0 && new_b == 1) { // -x <= c'
+                    skip = add_lb_constraint(x, new_c);
+                  } else { // a'z - b'x <= c' with a' > 1, b' > 1
                     if (find_ghost_var(z, new_a) && find_ghost_var(x, new_b)) {
                       auto gaz_new = get_ghost_var(z, new_a);
                       auto gbx_new = get_ghost_var(x, new_b);
                       if (tvpi_utils::find(ext_vars, gbx_new) &&
                           tvpi_utils::find(ext_vars, gaz_new)) {
-                        m_ext_absval += (gaz_new - gbx_new <= new_c);
+                        skip = add_tvpi_constraint(gaz_new, gbx_new, new_c);
                       }
                     }
                   }
+                  CRAB_LOG("tvpi-dbm-reduce2",
+                           crab::outs() << "=>>>" << new_a << "*" << z << "-"
+                                        << new_b << "*" << x << " <= " << new_c
+                                        << (skip ? ", skip" : "") << "\n");
                 }
                 // by - ax <= c && x <= f => y <= c'
                 auto bnds = m_base_absval.at(x);
@@ -1309,10 +940,11 @@ public:
                       resultant(b, y, a, x, *copt, 1, 1, boost::none, *fopt);
                   auto new_a = std::get<0>(ret);
                   auto new_c = std::get<2>(ret);
+                  bool skip = add_ub_constraint(y, new_c);
                   CRAB_LOG("tvpi-dbm-reduce2",
-                           crab::outs() << "=>>>" << new_a << "*" << y
-                                        << "<=" << new_c << "\n");
-                  m_base_absval += (y <= new_c);
+                           crab::outs()
+                               << "=>>>" << new_a << "*" << y << "<=" << new_c
+                               << (skip ? ", skip" : "") << "\n");
                 }
                 // by - ax <= c && -y <= f => -x <= c'
                 bnds = m_base_absval.at(y);
@@ -1326,11 +958,12 @@ public:
                       resultant(b, y, a, x, *copt, 1, boost::none, 1, (-*fopt));
                   auto new_b = std::get<1>(ret);
                   auto new_c = std::get<2>(ret);
-                  CRAB_LOG("tvpi-dbm-reduce2", crab::outs()
-                                                   << "=>>>"
-                                                   << "-" << new_b << "*" << x
-                                                   << " <= " << new_c << "\n");
-                  m_base_absval += (-x <= new_c);
+                  bool skip = add_lb_constraint(x, new_c);
+                  CRAB_LOG("tvpi-dbm-reduce2",
+                           crab::outs()
+                               << "=>>>"
+                               << "-" << new_b << "*" << x << " <= " << new_c
+                               << (skip ? ", skip" : "") << "\n");
                 }
               } else if (x != y && !(a == 1 && b == 1) && counter &&
                          (x == *counter || y == *counter)) {
@@ -1348,10 +981,11 @@ public:
                                  << "*" << *xlb << ", " << b << "*" << y
                                  << " <= " << b << "*" << *yub << ")\n");
                     number_t c_p = number_t(b) * (*yub) - number_t(a) * (*xlb);
+                    bool skip = add_tvpi_constraint(gby, gax, c_p);
                     CRAB_LOG("tvpi-dbm-reduce2",
-                             crab::outs() << "=>>>" << gby << "-" << gax
-                                          << " <= " << c_p << "\n");
-                    m_ext_absval += (gby - gax <= c_p);
+                             crab::outs()
+                                 << "=>>>" << gby << "-" << gax << " <= " << c_p
+                                 << (skip ? ", skip" : "") << "\n");
                   }
                 }
               }
@@ -1385,8 +1019,10 @@ public:
                                             << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
       this2.m_coeff_map.meet(other.m_coeff_map);
+      this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
+      other2.counter = other2.counter ? other2.counter : counter;
       other2.m_coeff_map.meet(m_coeff_map);
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-leq", crab::outs() << "[leq reduced]\n"
@@ -1409,10 +1045,12 @@ public:
       CRAB_LOG("tvpi-dbm-join", crab::outs() << "[join]\n"
                                              << *this << "\nwith\n"
                                              << other << "\n");
+      counter = counter ? counter : other.counter;
       m_coeff_map.join(other.m_coeff_map);
       tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
       other2.m_coeff_map.join(m_coeff_map);
+      other2.counter = other2.counter ? other2.counter : counter;
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-join", crab::outs() << "[reduced join]\n"
                                              << *this << "\nwith\n"
@@ -1420,6 +1058,7 @@ public:
       m_base_absval |= other2.m_base_absval;
       m_ext_absval |= other2.m_ext_absval;
       filter_dbms();
+      prune_coefficients();
       CRAB_LOG("tvpi-dbm-join", crab::outs() << "[res]\n" << *this << "\n");
     }
   }
@@ -1435,8 +1074,10 @@ public:
                                              << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
       this2.m_coeff_map.join(other.m_coeff_map);
+      this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
+      other2.counter = other2.counter ? other2.counter : this2.counter;
       other2.m_coeff_map.join(m_coeff_map);
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-join", crab::outs() << "[reduced join]\n"
@@ -1445,6 +1086,7 @@ public:
       this2.m_base_absval |= other2.m_base_absval;
       this2.m_ext_absval |= other2.m_ext_absval;
       this2.filter_dbms();
+      this2.prune_coefficients();
       CRAB_LOG("tvpi-dbm-join", crab::outs() << "[res]\n" << this2 << "\n");
       return this2;
     }
@@ -1460,8 +1102,10 @@ public:
                                              << *this << "\nwith\n"
                                              << other << "\n");
       m_coeff_map.meet(other.m_coeff_map);
+      counter = counter ? counter : other.counter;
       tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
+      other2.counter = other2.counter ? other2.counter : counter;
       other2.m_coeff_map.meet(m_coeff_map);
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-meet", crab::outs() << "[reduced meet]\n"
@@ -1487,9 +1131,11 @@ public:
                                              << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
       this2.m_coeff_map.meet(other.m_coeff_map);
+      this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
       other2.m_coeff_map.meet(m_coeff_map);
+      other2.counter = other2.counter ? other2.counter : this2.counter;
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-meet", crab::outs() << "[reduced meet]\n"
                                              << this2 << "\nwith\n"
@@ -1515,9 +1161,11 @@ public:
                                               << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
       this2.m_coeff_map.join(other.m_coeff_map);
+      this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
       other2.m_coeff_map.join(m_coeff_map);
+      other2.counter = other2.counter ? other2.counter : this2.counter;
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-widen", crab::outs() << "[reduced widen]\n"
                                               << this2 << "\nwith\n"
@@ -1529,7 +1177,9 @@ public:
       tvpi_dbm_domain_t res(std::move(out_base_absval),
                             std::move(out_ext_absval),
                             std::move(out_coeff_map));
+      res.counter = this2.counter ? this2.counter : other2.counter;
       res.filter_dbms();
+      res.prune_coefficients();
       CRAB_LOG("tvpi-dbm-widen", crab::outs() << "[res]\n" << res << "\n");
       return res;
     }
@@ -1548,9 +1198,11 @@ public:
                                               << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
       this2.m_coeff_map.join(other.m_coeff_map);
+      this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
       other2.m_coeff_map.join(m_coeff_map);
+      other2.counter = other2.counter ? other2.counter : this2.counter;
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-widen", crab::outs() << "[reduced widen]\n"
                                               << this2 << "\nwith\n"
@@ -1563,7 +1215,9 @@ public:
       tvpi_dbm_domain_t res(std::move(out_base_absval),
                             std::move(out_ext_absval),
                             std::move(out_coeff_map));
+      res.counter = this2.counter ? this2.counter : other2.counter;
       res.filter_dbms();
+      res.prune_coefficients();
       CRAB_LOG("tvpi-dbm-widen", crab::outs() << "[res]\n" << res << "\n");
       return res;
     }
@@ -1580,9 +1234,11 @@ public:
                                                << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
       this2.m_coeff_map.meet(other.m_coeff_map);
+      this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
       other2.m_coeff_map.meet(m_coeff_map);
+      other2.counter = other2.counter ? other2.counter : this2.counter;
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-narrow", crab::outs() << "[reduced narrow]\n"
                                                << this2 << "\nwith\n"
@@ -1594,6 +1250,7 @@ public:
       tvpi_dbm_domain_t res(std::move(out_base_absval),
                             std::move(out_ext_absval),
                             std::move(out_coeff_map));
+      res.counter = this2.counter ? this2.counter : other2.counter;
       CRAB_LOG("tvpi-dbm-narrow", crab::outs() << "[res]\n" << res << "\n");
       return res;
     }
@@ -1634,6 +1291,7 @@ public:
         }
 
       } // end for
+      tvpi_reduce();
     }
 
     CRAB_LOG("tvpi-dbm", crab::outs() << "assume(" << csts
@@ -1776,6 +1434,14 @@ public:
         break;
       }
 
+      // add x := x op z if x in extended dbm
+      if (x == y) {
+        auto extvars = m_ext_absval.vars();
+        if (tvpi_utils::find(extvars, x)) {
+          m_ext_absval.apply(op, x, y, z);
+        }
+      }
+
       auto it = m_coeff_map.find(x);
       if (it == m_coeff_map.end()) {
         return;
@@ -1819,6 +1485,13 @@ public:
     if (!is_bottom()) {
       m_base_absval.apply(op, x, y, z);
       eval_apply(op, x, y, z);
+      eval_apply(op, x, z, y);
+      if (x == y || x == z) {
+        auto extvars = m_ext_absval.vars();
+        if (tvpi_utils::find(extvars, x)) {
+          m_ext_absval.apply(op, x, y, z);
+        }
+      }
       auto it = m_coeff_map.find(x);
       if (it == m_coeff_map.end()) {
         return;
@@ -1830,10 +1503,17 @@ public:
     }
   }
 
+  // dst := trunc or extend src
   void apply(int_conv_operation_t op, const variable_t &dst,
              const variable_t &src) override {
     if (!is_bottom()) {
       m_base_absval.apply(op, dst, src);
+      if (dst == src) {
+        auto extvars = m_ext_absval.vars();
+        if (tvpi_utils::find(extvars, dst)) {
+          m_ext_absval.apply(op, dst, src);
+        }
+      }
     }
   }
 
@@ -1841,13 +1521,25 @@ public:
              const variable_t &z) override {
     if (!is_bottom()) {
       m_base_absval.apply(op, x, y, z);
+      if (x == y || x == z) {
+        auto extvars = m_ext_absval.vars();
+        if (tvpi_utils::find(extvars, x)) {
+          m_ext_absval.apply(op, x, y, z);
+        }
+      }
     }
   }
 
   void apply(bitwise_operation_t op, const variable_t &x, const variable_t &y,
-             number_t k) override {
+             number_t z) override {
     if (!is_bottom()) {
-      m_base_absval.apply(op, x, y, k);
+      m_base_absval.apply(op, x, y, z);
+      if (x == y) {
+        auto extvars = m_ext_absval.vars();
+        if (tvpi_utils::find(extvars, x)) {
+          m_ext_absval.apply(op, x, y, z);
+        }
+      }
     }
   }
 
@@ -2020,8 +1712,8 @@ public:
     }
   }
 
-  void normalize() override {}
-  void minimize() override {}
+  void normalize() override { normalize_dbms(); }
+  void minimize() override { filter_dbms(); }
 
   void intrinsic(std::string name, const variable_or_constant_vector_t &inputs,
                  const variable_vector_t &outputs) override {
