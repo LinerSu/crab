@@ -59,10 +59,11 @@ boost::optional<T> find(const std::vector<T> &vec, const T &value) {
   }
 }
 
-/// @brief compute gcd value by two unsigned ints
-/// @tparam T a type of the number, we used unsigned int only
-/// @param a unsigned int
-/// @param b unsigned int
+/// @brief compute gcd value by two numbers
+/// @tparam T a type of the number
+/// @param a number
+/// @param b number
+/// @pre a and b are positive numbers
 /// @return the gcd value; if a or b is 0, return another value
 template <typename T> T gcd(T a, T b) {
   // Continue until b becomes zero
@@ -72,6 +73,18 @@ template <typename T> T gcd(T a, T b) {
     a = temp;
   }
   return a;
+}
+
+/// @brief compute gcd value by three numbers
+/// @tparam T a type of the number
+/// @param a number
+/// @param b number
+/// @param c number
+/// @pre a, b, and c are positive numbers
+/// @return the gcd value;
+template <typename T>
+T gcd3(T a, T b, T c) {
+    return gcd(gcd(a, b), c);
 }
 
 template <typename T> void intersect(std::set<T> &a, const std::set<T> &b) {

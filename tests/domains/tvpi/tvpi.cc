@@ -19,6 +19,7 @@ z_cfg_t *prog1(variable_factory_t &vfac) {
     x = 0;
     y = 0;
     while (i < N) {
+      // loop_counter(i);
       i++;
       x = x + 4;
       y = y + 8;
@@ -95,7 +96,7 @@ z_cfg_t *prog2(variable_factory_t &vfac) {
   z_basic_block_t &loop_body = cfg->insert("loop_body");
   z_basic_block_t &loop_body_then = cfg->insert("loop_body_then");
   z_basic_block_t &loop_body_else = cfg->insert("loop_body_else");
-  z_basic_block_t &loop_body_tail = cfg->insert("loop_body_tail");      
+  z_basic_block_t &loop_body_tail = cfg->insert("loop_body_tail");
   z_basic_block_t &loop_exit = cfg->insert("loop_exit");
   z_basic_block_t &exit = cfg->insert("exit");
   // adding control flow
@@ -191,6 +192,11 @@ int main (int argc, char** argv) {
       return 0;
   }
 
+#if TVPI_DBM_FIXED_COEFFICIENTS
+  auto &coeffs = crab_domain_params_man::get().coefficients();
+  coeffs.insert(coeffs.end(), {2, 3, 4});
+#endif
+
   {
     variable_factory_t vfac;
     z_cfg_t *cfg = prog1(vfac);
@@ -200,8 +206,6 @@ int main (int argc, char** argv) {
     run_and_check(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     delete cfg;
   }
-
-  exit(0);
 
   {
     variable_factory_t vfac;

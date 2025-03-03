@@ -6,6 +6,7 @@
 #include <string>
 
 #include <crab/domains/abstract_domain.hpp>
+#include <crab/domains/abstract_domain_params.hpp>
 #include <crab/domains/abstract_domain_specialized_traits.hpp>
 #include <crab/domains/inter_abstract_operations.hpp>
 #include <crab/domains/tvpi/coefficient_map.hpp>
@@ -44,10 +45,14 @@ public:
   using typename abstract_domain_api_t::variable_t;
   using typename abstract_domain_api_t::variable_vector_t;
   using typename abstract_domain_api_t::varname_t;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
   using coefficient_map_t =
       typename tvpi_utils::coefficient_map<variable_t,
                                            unsigned>::coefficient_map_t;
   using coefficient_set_t = typename coefficient_map_t::coefficient_set_t;
+#else
+  using coefficient_set_t = std::vector<unsigned>;
+#endif
 
   static_assert(std::is_same<typename abstract_domain_api_t::number_t,
                              ikos::z_number>::value,
@@ -100,8 +105,14 @@ private:
 
   base_domain_t m_base_absval;
   base_domain_t m_ext_absval;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
   coefficient_map_t m_coeff_map;
+#endif
   boost::optional<variable_t> counter;
+
+  // ============================================================
+  // Ghost variable APIs
+  // ============================================================
 
   variable_t get_ghost_var(const variable_t &v, unsigned coefficient) {
     if (coefficient == 0) {
@@ -110,12 +121,14 @@ private:
       return v;
     }
 
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
     auto it = m_coeff_map.find(v);
     if (it != m_coeff_map.end()) {
       it->second.insert(coefficient);
     } else {
       m_coeff_map.insert({v, coefficient});
     }
+#endif
     auto &vfac = const_cast<varname_t *>(&(v.name()))->get_var_factory();
 
     variable_t coeff_v(vfac.get_or_insert_varname(v.name(), coefficient),
@@ -150,7 +163,9 @@ private:
       return boost::none;
     } else if (coefficient == 1) {
       return v;
-    } else if (m_coeff_map.empty()) {
+    }
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
+    else if (m_coeff_map.empty()) {
       return boost::none;
     } else {
       auto it = m_coeff_map.find(v);
@@ -165,6 +180,17 @@ private:
       }
       return boost::none;
     }
+#else
+    else if (tvpi_utils::find(crab_domain_params_man::get().coefficients(),
+                              coefficient) != boost::none) {
+      auto &vfac = const_cast<varname_t *>(&(v.name()))->get_var_factory();
+      variable_t coeff_v(vfac.get_or_insert_varname(v.name(), coefficient),
+                         v.get_type());
+      return coeff_v;
+    } else {
+      return boost::none;
+    }
+#endif
   }
 
   boost::optional<variable_t>
@@ -172,14 +198,15 @@ private:
     return find_ghost_var(v, convert(coefficient));
   }
 
+  // ============================================================
+  // Linear Constraints APIs
+  // ============================================================
+
   linear_expression_t rewrite_linear_expression(const linear_expression_t &e) {
     /**
      *
-     * Given c1*x1 + c2*x2 +... + k, rewrite each ci*xi into
-     *
-     * cixi         if ci is one of tracked coefficients then
-     *    c1x1 + c2x2 +... + k
-     *      ci*xi  otherwise
+     * Given c1*x1 + c2*x2 +... + k, rewrite into
+     *       c1x1 + c2x2 +... + kc
      **/
     linear_expression_t res;
     for (auto it = e.begin(), et = e.end(); it != et; ++it) {
@@ -188,8 +215,18 @@ private:
       if (coeff == 0) {
         continue;
       } else if (coeff > 0) {
+#if TVPI_DBM_FIXED_COEFFICIENTS
+        if (find_ghost_var(v, coeff) == boost::none) { // give up
+          return e;
+        }
+#endif
         res = res + get_ghost_var(v, coeff);
       } else if (coeff < 0) {
+#if TVPI_DBM_FIXED_COEFFICIENTS
+        if (find_ghost_var(v, -coeff) == boost::none) { // give up
+          return e;
+        }
+#endif
         res = res - get_ghost_var(v, -coeff);
       } else { // give up
         res = res + coeff * v;
@@ -201,152 +238,267 @@ private:
 
   linear_constraint_t
   rewrite_linear_constraint(const linear_constraint_t &cst) {
-    return linear_constraint_t(rewrite_linear_expression(cst.expression()),
-                               cst.kind());
-  }
-
-  linear_expression_t rewrite_linear_expression(const linear_expression_t &e,
-                                                unsigned coefficient,
-                                                bool divd) const {
     /**
      *
-     * Given c1*x1 + c2*x2 +... + k, and a coefficient c. rewrite into
-     *       (c op c1)x1 + (c op c2)x2 +... + c op k
-     * where op is either division or multiplication
+     * Given c1*x1 + c2*x2 +... <= k rewrite into
+     *       c1'x1 + c2'x2 + ... <= k', if all coefficients have common divisor,
+     *  c1' = c1 / d, c2' = c2 / d, ..., k' = k / d
      **/
-
-    number_t tracked_coeff(coefficient);
     linear_expression_t res;
+    const linear_expression_t e = cst.expression();
+    number_t d(0);
+
     for (auto it = e.begin(), et = e.end(); it != et; ++it) {
-      const variable_t &v = (*it).second;
       const number_t &coeff = (*it).first;
-      bool neg = coeff < 0;
-      if (coeff == 0) {
-        continue;
-      }
-      if (divd) {
-        if (coeff % coefficient == 0) {
-          number_t new_coeff =
-              neg ? -coeff / tracked_coeff : coeff / tracked_coeff;
-          if (auto vgvar = find_ghost_var(v, new_coeff)) {
-            res = neg ? res - *vgvar : res + *vgvar;
-          } else {
-            res = neg ? res - new_coeff * v : res + new_coeff * v;
-          }
-        } else { // give up, cannot rewrite it
-          return e;
-        }
-      } else { // multiple
-        number_t new_coeff =
-            neg ? -coeff * tracked_coeff : coeff * tracked_coeff;
-        if (auto vgvar = find_ghost_var(v, new_coeff)) {
-          res = neg ? res - *vgvar : res + *vgvar;
-        } else {
-          res = neg ? res - new_coeff * v : res + new_coeff * v;
-        }
+      number_t abs_coeff = coeff < 0 ? -coeff : coeff;
+      d = d == number_t(0) ? abs_coeff : tvpi_utils::gcd(d, abs_coeff);
+      if (d == number_t(1)) {
+        break;
       }
     }
-    if (divd) {
-      if (e.constant() % tracked_coeff == 0) {
-        res = res + e.constant() / tracked_coeff;
-      } else { // give up, cannot rewrite it
-        return e;
+    const number_t &k = e.constant();
+    number_t abs_k = k < 0 ? -k : k;
+    d = d == number_t(0) ? abs_k : tvpi_utils::gcd(d, abs_k);
+    if (d != number_t(1) && d != number_t(0)) {
+      for (auto it = e.begin(), et = e.end(); it != et; ++it) {
+        const variable_t &v = (*it).second;
+        const number_t &coeff = (*it).first;
+        number_t abs_coeff = coeff < 0 ? -coeff : coeff;
+        bool neg = coeff < 0;
+        number_t new_coeff = abs_coeff / d;
+#if TVPI_DBM_FIXED_COEFFICIENTS
+        if (find_ghost_var(v, new_coeff) == boost::none) { // give up
+          return cst;
+        }
+#endif
+        auto gv = get_ghost_var(v, new_coeff);
+        res = neg ? res - gv : res + gv;
       }
+      number_t new_k = k / d;
+      res = res + new_k;
     } else {
-      res = res + e.constant() * tracked_coeff;
-    }
-    return res;
-  }
-
-  linear_constraint_t rewrite_linear_constraint(const linear_constraint_t &cst,
-                                                unsigned coefficient,
-                                                bool divd) const {
-    return linear_constraint_t(
-        rewrite_linear_expression(cst.expression(), coefficient, divd),
-        cst.kind());
-  }
-
-  boost::optional<linear_expression_t>
-  try_rewrite_linear_expression(const linear_expression_t &e) const {
-    linear_expression_t res;
-    for (auto it = e.begin(), et = e.end(); it != et; ++it) {
-      const variable_t &v = (*it).second;
-      const number_t &coeff = (*it).first;
-      if (coeff == 0) {
-        continue;
-      } else if (coeff > 0) {
-        auto gv = find_ghost_var(v, coeff);
-        if (gv == boost::none) {
-          return boost::none;
+      // rewrite to same form but using ghost variable
+      for (auto it = e.begin(), et = e.end(); it != et; ++it) {
+        const variable_t &v = (*it).second;
+        const number_t &coeff = (*it).first;
+        number_t abs_coeff = coeff < 0 ? -coeff : coeff;
+        bool neg = coeff < 0;
+#if TVPI_DBM_FIXED_COEFFICIENTS
+        if (find_ghost_var(v, abs_coeff) == boost::none) { // give up
+          return cst;
         }
-        res = res + *gv;
-      } else if (coeff < 0) {
-        auto gv = find_ghost_var(v, -coeff);
-        if (gv == boost::none) {
-          return boost::none;
-        }
-        res = res - *gv;
-      } else { // give up
-        return boost::none;
+#endif
+        auto gv = get_ghost_var(v, abs_coeff);
+        res = neg ? res - gv : res + gv;
       }
+      res = res + k;
     }
-    res = res + e.constant();
-    return res;
+    return linear_constraint_t(res, cst.kind());
   }
 
   boost::optional<linear_constraint_t>
   try_rewrite_linear_constraint(const linear_constraint_t &cst) const {
-    auto e_opt = try_rewrite_linear_expression(cst.expression());
-    if (e_opt == boost::none) {
-      return boost::none;
+
+    linear_expression_t res;
+    const linear_expression_t e = cst.expression();
+    number_t d(0);
+
+    for (auto it = e.begin(), et = e.end(); it != et; ++it) {
+      const number_t &coeff = (*it).first;
+      number_t abs_coeff = coeff < 0 ? -coeff : coeff;
+      d = d == number_t(0) ? abs_coeff : tvpi_utils::gcd(d, abs_coeff);
+      if (d == number_t(1)) {
+        break;
+      }
     }
-    return linear_constraint_t(*e_opt, cst.kind());
+    const number_t k = e.constant();
+    number_t abs_k = k < 0 ? -k : k;
+    d = d == number_t(0) ? abs_k : tvpi_utils::gcd(d, abs_k);
+    if (d != number_t(1) && d != number_t(0)) {
+      for (auto it = e.begin(), et = e.end(); it != et; ++it) {
+        const variable_t &v = (*it).second;
+        const number_t &coeff = (*it).first;
+        number_t abs_coeff = coeff < 0 ? -coeff : coeff;
+        number_t new_coeff = abs_coeff / d;
+        bool neg = coeff < 0;
+        auto gv = find_ghost_var(v, new_coeff);
+        if (!gv)
+          return boost::none;
+        res = neg ? res - (*gv) : res + (*gv);
+      }
+      number_t new_k = k / d;
+      res = res + new_k;
+    } else {
+      // rewrite to same form but using ghost variable
+      for (auto it = e.begin(), et = e.end(); it != et; ++it) {
+        const variable_t &v = (*it).second;
+        const number_t &coeff = (*it).first;
+        number_t abs_coeff = coeff < 0 ? -coeff : coeff;
+        bool neg = coeff < 0;
+        auto gv = find_ghost_var(v, abs_coeff);
+        if (!gv)
+          return boost::none;
+        res = neg ? res - (*gv) : res + (*gv);
+      }
+      res = res + k;
+    }
+    return linear_constraint_t(res, cst.kind());
   }
 
   void rewrite_assign(const variable_t &x, const linear_expression_t &e,
-                      unsigned coefficient, bool weak) {
-    assert(coefficient > 1);
-
-    variable_t ghost_x = get_ghost_var(x, coefficient);
-    number_t tracked_coefficient(coefficient);
+                      bool weak) {
     if (e.is_constant()) {
-      // rewrite("x := n") = "x * COEF := n * COEF"
-      if (!weak) {
-        m_ext_absval.assign(ghost_x, e * tracked_coefficient);
-      } else {
-        m_ext_absval.weak_assign(ghost_x, e * tracked_coefficient);
+      // (1) e == constant
+      CRAB_LOG("tvpi-dbm-assign",
+               crab::outs() << "cannot rewrite: " << x << " := " << e << "\n");
+      return;
+    } else if (e.size() == 1) {
+      // (2) e == b*y +/- c
+      auto it = e.begin();
+      const number_t &b = (*it).first;
+      const variable_t &y = (*it).second;
+      number_t abs_b = b > number_t(0) ? b : -b;
+      bool neg_b = (b < number_t(0));
+      const number_t c = e.constant();
+      number_t abs_c = c > number_t(0) ? c : -c;
+      if (abs_b != number_t(0) && abs_b != number_t(1)) {
+#if TVPI_DBM_FIXED_COEFFICIENTS
+        if (find_ghost_var(y, abs_b) == boost::none) { // give up
+          CRAB_LOG("tvpi-dbm-assign", crab::outs() << "cannot rewrite: " << x
+                                                   << " := " << e << "\n");
+          return;
+        }
+#endif
+        auto by = get_ghost_var(y, abs_b);
+        if (c == number_t(0)) {
+          // rewrite("x := b*y") = "x := by"
+          linear_expression_t e1 =
+              neg_b ? linear_expression_t(-by) : linear_expression_t(by);
+          CRAB_LOG("tvpi-dbm-assign", crab::outs()
+                                          << "processing rewritten " << x
+                                          << " := " << e1 << "\n");
+          if (!weak) {
+            m_ext_absval.assign(x, e1);
+          } else {
+            m_ext_absval.weak_assign(x, e1);
+          }
+        } else {
+          linear_expression_t e1 = neg_b ? linear_expression_t(-by + c)
+                                         : linear_expression_t(by + c);
+          CRAB_LOG("tvpi-dbm-assign", crab::outs()
+                                          << "processing rewritten " << x
+                                          << " := " << e1 << "\n");
+          if (!weak) {
+            m_ext_absval.assign(x, e1);
+          } else {
+            m_ext_absval.weak_assign(x, e1);
+          }
+          // rewrite("x := b*y +/- c") = "x / d := (b * y  +/- c) / d "
+          // compute gcd(b, c) = d
+          number_t d = tvpi_utils::gcd(abs_b, abs_c);
+          // if d > 1, let b' = b / d, c' = c / d
+          if (d > number_t(1)) {
+            number_t new_abs_b = abs_b / d;
+            number_t new_c = c / d;
+            // => find b' * y + / - c' => assign x by (b' * y + / - c') * d
+            if (new_abs_b > number_t(1)) {
+#if TVPI_DBM_FIXED_COEFFICIENTS
+              if (find_ghost_var(y, new_abs_b) == boost::none) { // give up
+                CRAB_LOG("tvpi-dbm-assign", crab::outs()
+                                                << "cannot rewrite: " << x
+                                                << " := " << e << "\n");
+                return;
+              }
+#endif
+              auto by = get_ghost_var(y, new_abs_b);
+              linear_expression_t e2 = neg_b ? linear_expression_t(-by + new_c)
+                                             : linear_expression_t(by + new_c);
+              CRAB_LOG("tvpi-dbm-assign", crab::outs()
+                                              << "processing rewritten " << x
+                                              << " := " << e2 << "\n");
+              if (!weak) {
+                m_ext_absval.assign(x, e2);
+              } else {
+                m_ext_absval.weak_assign(x, e2);
+              }
+              m_ext_absval.apply(OP_MULTIPLICATION, x, x, d);
+            } else { // new_abs_b == 1
+              linear_expression_t e2 = neg_b ? linear_expression_t(-y + new_c)
+                                             : linear_expression_t(y + new_c);
+              CRAB_LOG("tvpi-dbm-assign", crab::outs()
+                                              << "processing rewritten " << x
+                                              << " := " << e2 << "\n");
+              if (!weak) {
+                m_ext_absval.assign(x, e2);
+              } else {
+                m_ext_absval.weak_assign(x, e2);
+              }
+              m_base_absval.apply(OP_MULTIPLICATION, x, x, d);
+            }
+          }
+        }
       }
-    } else if (boost::optional<variable_t> y = e.get_variable()) {
-      // rewrite("x := y") = "x * COEF := y * COEF"
-      if (find_ghost_var(*y, coefficient) == boost::none) {
-        return;
-      }
-      variable_t ghost_y = get_ghost_var(*y, coefficient);
-      if (!weak) {
-        m_ext_absval.assign(ghost_x, ghost_y);
-      } else {
-        m_ext_absval.weak_assign(ghost_x, ghost_y);
+    } else if (e.size() == 2) {
+      // (3) e == b*y +/- c*z +/- d
+      auto it = e.begin();
+      const number_t &b = (*it).first;
+      number_t abs_b = b > number_t(0) ? b : -b;
+      bool neg_b = (b < number_t(0));
+      const variable_t &y = (*it).second;
+      it = boost::next(it);
+      const number_t &c = (*it).first;
+      number_t abs_c = c > number_t(0) ? c : -c;
+      bool neg_c = (c < number_t(0));
+      const variable_t &z = (*it).second;
+      number_t d = e.constant();
+      number_t abs_d = d > number_t(0) ? d : -d;
+      if (b == number_t(0)) {
+        linear_expression_t e1 = linear_expression_t(c * z + d);
+        if (!weak) {
+          assign(x, e1);
+        } else {
+          weak_assign(x, e1);
+        }
+      } else if (c == number_t(0)) {
+        linear_expression_t e1 = linear_expression_t(b * y + d);
+        if (!weak) {
+          assign(x, e1);
+        } else {
+          weak_assign(x, e1);
+        }
+      } else if (abs_b != number_t(1) && abs_c != number_t(1)) {
+#if TVPI_DBM_FIXED_COEFFICIENTS
+        if (find_ghost_var(y, abs_b) == boost::none ||
+            find_ghost_var(z, abs_c) == boost::none) { // give up
+          CRAB_LOG("tvpi-dbm-assign", crab::outs() << "cannot rewrite: " << x
+                                                   << " := " << e << "\n");
+          return;
+        }
+#endif
+        auto by = get_ghost_var(y, abs_b);
+        auto cz = get_ghost_var(z, abs_c);
+        linear_expression_t e1 = linear_expression_t(neg_b ? -by : by) +
+                                 linear_expression_t(neg_c ? -cz : cz) + d;
+        CRAB_LOG("tvpi-dbm-assign", crab::outs() << "processing rewritten " << x
+                                                 << " := " << e1 << "\n");
+        if (!weak) {
+          m_ext_absval.assign(x, e1);
+        } else {
+          m_ext_absval.weak_assign(x, e1);
+        }
+        // rewrite("x := b*y +/- c*z +/- d") = "x / d := (b * y  +/- c * z +/-
+        // d) / d "
+        // TODO: ignore this for now.
+        // number_t d = tvpi_utils::gcd3(abs_b, abs_c, abs_d);
       }
     } else {
-      if (!weak) {
-        linear_expression_t e1 =
-            rewrite_linear_expression(e, coefficient, true);
-        if (!e1.equal(e)) {
-          m_ext_absval.assign(ghost_x, e1);
-        }
-        e1 = rewrite_linear_expression(e, coefficient, false);
-        if (!e1.equal(e)) {
-          m_ext_absval.assign(ghost_x, e1);
-        }
-      } else {
-        linear_expression_t e1 =
-            rewrite_linear_expression(e, coefficient, true);
-        if (!e1.equal(e)) {
-          m_ext_absval.weak_assign(ghost_x, e1);
-        }
-        e1 = rewrite_linear_expression(e, coefficient, false);
-        if (!e1.equal(e)) {
-          m_ext_absval.weak_assign(ghost_x, e1);
+      // (4) e == general form
+      auto e1 = rewrite_linear_expression(e);
+      if (!e1.equal(e)) {
+        if (!weak) {
+          m_ext_absval.assign(x, e1);
+        } else {
+          m_ext_absval.weak_assign(x, e1);
         }
       }
     }
@@ -396,12 +548,9 @@ private:
     m_ext_absval.apply(op, ghost_x, ghost_y, ghost_z);
   }
 
-  tvpi_dbm_domain(base_domain_t &&base, base_domain_t &&extd,
-                  coefficient_map_t &&coeff_map)
-      : m_base_absval(std::move(base)), m_ext_absval(std::move(extd)),
-        m_coeff_map(std::move(coeff_map)) {
-    // tvpi_reduce();
-  }
+  // ============================================================
+  // TVPI APIs
+  // ============================================================
 
   bool add_tvpi_constraint(const variable_t &ax, const variable_t &by,
                            const number_t &c) {
@@ -547,6 +696,20 @@ private:
     }
   }
 
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
+  tvpi_dbm_domain(base_domain_t &&base, base_domain_t &&extd,
+                  coefficient_map_t &&coeff_map)
+      : m_base_absval(std::move(base)), m_ext_absval(std::move(extd)),
+        m_coeff_map(std::move(coeff_map)) {
+    // tvpi_reduce();
+  }
+#else
+  tvpi_dbm_domain(base_domain_t &&base, base_domain_t &&extd)
+      : m_base_absval(std::move(base)), m_ext_absval(std::move(extd)) {
+    // tvpi_reduce();
+  }
+#endif
+
 public:
   DEFAULT_SELECT(tvpi_dbm_domain_t)
   BOOL_OPERATIONS_NOT_IMPLEMENTED(tvpi_dbm_domain_t)
@@ -570,13 +733,17 @@ public:
   }
 
   void set_to_top() override {
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
     m_coeff_map.set_to_top();
+#endif
     m_base_absval.set_to_top();
     m_ext_absval.set_to_top();
   }
 
   void set_to_bottom() override {
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
     m_coeff_map.set_to_bottom();
+#endif
     m_base_absval.set_to_bottom();
     m_ext_absval.set_to_bottom();
   }
@@ -593,51 +760,58 @@ public:
   }
 
   bool is_bottom() const override {
-    return m_coeff_map.is_bottom() || m_base_absval.is_bottom() ||
-           m_ext_absval.is_bottom();
+    bool res = m_base_absval.is_bottom() || m_ext_absval.is_bottom();
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
+    res = res || m_coeff_map.is_bottom();
+#endif
+    return res;
   }
 
   bool is_top() const override {
-    return m_coeff_map.is_top() && m_base_absval.is_top() &&
-           m_ext_absval.is_top();
+    bool res = m_base_absval.is_top() && m_ext_absval.is_top();
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
+    res = res && m_coeff_map.is_top();
+#endif
+    return res;
   }
 
-  void normalize_dbms() {
-    // This is a top level function to normalize tvpi constraints.
-    // However, we wish not to run this process in the end since we always keep
-    // inequalities after normalized.
-    // Just in case we need in the future, this is the implementation.
-    for (auto it1 = m_coeff_map.begin(); it1 != m_coeff_map.end(); ++it1) {
-      const variable_t &x = it1->first;
-      const coefficient_set_t &a_coeffs = it1->second;
-      for (auto ita = a_coeffs.begin(); ita != a_coeffs.end(); ++ita) {
-        auto gax = get_ghost_var(x, *ita);
-        for (auto it2 = std::next(it1); it2 != m_coeff_map.end(); ++it2) {
-          const variable_t &y = it2->first;
-          const coefficient_set_t &b_coeffs = it2->second;
-          for (auto itb = b_coeffs.begin(); itb != b_coeffs.end(); ++itb) {
-            auto gby = get_ghost_var(y, *itb);
-            auto copt = m_ext_absval.difference_bound(gby, gax);
-            if (copt) {
-              auto ret = normalize_tvpi(*ita, *itb, *copt);
-              auto gcd = ret.first;
-              unsigned new_a = *ita / gcd;
-              unsigned new_b = *itb / gcd;
-              number_t new_c = ret.second;
-              if (new_a == 1 && new_b == 1) {
-                m_base_absval += (x - y <= new_c);
-              } else {
-                auto gax_new = get_ghost_var(x, new_a);
-                auto gby_new = get_ghost_var(y, new_b);
-                m_ext_absval += (gax_new - gby_new <= new_c);
-              }
-              // TODO: Remove old constraint
-            }
-          }
-        }
-      }
-    }
-  }
+  // void normalize_dbms() {
+  //   // This is a top level function to normalize tvpi constraints.
+  //   // However, we wish not to run this process in the end since we always
+  //   keep
+  //   // inequalities after normalized.
+  //   // Just in case we need in the future, this is the implementation.
+  //   for (auto it1 = m_coeff_map.begin(); it1 != m_coeff_map.end(); ++it1) {
+  //     const variable_t &x = it1->first;
+  //     const coefficient_set_t &a_coeffs = it1->second;
+  //     for (auto ita = a_coeffs.begin(); ita != a_coeffs.end(); ++ita) {
+  //       auto gax = get_ghost_var(x, *ita);
+  //       for (auto it2 = std::next(it1); it2 != m_coeff_map.end(); ++it2) {
+  //         const variable_t &y = it2->first;
+  //         const coefficient_set_t &b_coeffs = it2->second;
+  //         for (auto itb = b_coeffs.begin(); itb != b_coeffs.end(); ++itb) {
+  //           auto gby = get_ghost_var(y, *itb);
+  //           auto copt = m_ext_absval.difference_bound(gby, gax);
+  //           if (copt) {
+  //             auto ret = normalize_tvpi(*ita, *itb, *copt);
+  //             auto gcd = ret.first;
+  //             unsigned new_a = *ita / gcd;
+  //             unsigned new_b = *itb / gcd;
+  //             number_t new_c = ret.second;
+  //             if (new_a == 1 && new_b == 1) {
+  //               m_base_absval += (x - y <= new_c);
+  //             } else {
+  //               auto gax_new = get_ghost_var(x, new_a);
+  //               auto gby_new = get_ghost_var(y, new_b);
+  //               m_ext_absval += (gax_new - gby_new <= new_c);
+  //             }
+  //             // TODO: Remove old constraint
+  //           }
+  //         }
+  //       }
+  //     }
+  //   }
+  // }
 
   void filter_dbms() {
     // This function is doing some inequalities removal based on the coefficient
@@ -658,7 +832,8 @@ public:
     extd2.project(bases);
     m_base_absval &= extd2;
 
-    // Remove inequalities if coefficients are not tracked.
+// Remove inequalities if coefficients are not tracked.
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
     ext_vars = m_ext_absval.vars();
     base_vars = m_base_absval.vars();
     std::unordered_set<variable_t> to_remove(ext_vars.begin(), ext_vars.end());
@@ -684,9 +859,11 @@ public:
              tvpi_utils::print_set(crab::outs(), to_remove);
              crab::outs() << "\n";);
     m_ext_absval.forget(variable_vector_t(to_remove.begin(), to_remove.end()));
+#endif
   }
 
   void prune_coefficients() {
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
     // This function removes coefficients that current DBM lost those
     // dimensions.
     auto ext_vars = m_ext_absval.vars();
@@ -707,6 +884,7 @@ public:
         ++it;
       }
     }
+#endif
   }
 
   void tvpi_reduce() {
@@ -750,9 +928,14 @@ public:
     for (auto it1 = traverse_vars.cbegin(); it1 != traverse_vars.cend();
          ++it1) {
       const variable_t &x = *it1;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       auto itc1 = m_coeff_map.find(x);
       const coefficient_set_t &a_coeffs =
           itc1 != m_coeff_map.end() ? itc1->second : no_coeff;
+#else
+      const coefficient_set_t &a_coeffs =
+          crab_domain_params_man::get().coefficients();
+#endif
       for (auto it2 = traverse_vars.cbegin(); it2 != traverse_vars.cend();
            ++it2) {
         const variable_t &y = *it2;
@@ -761,9 +944,14 @@ public:
         }
         if (tvpi_utils::find(base_vars, y) == boost::none)
           continue;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
         auto itc2 = m_coeff_map.find(y);
         const coefficient_set_t &b_coeffs =
             itc2 != m_coeff_map.end() ? itc2->second : no_coeff;
+#else
+        const coefficient_set_t &b_coeffs =
+            crab_domain_params_man::get().coefficients();
+#endif
         for_each_coefficient(a_coeffs, [&](unsigned a) {
           for_each_coefficient(b_coeffs, [&](unsigned b) {
             if (a != 1 or
@@ -1018,12 +1206,16 @@ public:
                                             << *this << "\n<=\n"
                                             << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       this2.m_coeff_map.meet(other.m_coeff_map);
+#endif
       this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
       other2.counter = other2.counter ? other2.counter : counter;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       other2.m_coeff_map.meet(m_coeff_map);
+#endif
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-leq", crab::outs() << "[leq reduced]\n"
                                             << this2 << "\n<=\n"
@@ -1046,10 +1238,14 @@ public:
                                              << *this << "\nwith\n"
                                              << other << "\n");
       counter = counter ? counter : other.counter;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       m_coeff_map.join(other.m_coeff_map);
+#endif
       tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       other2.m_coeff_map.join(m_coeff_map);
+#endif
       other2.counter = other2.counter ? other2.counter : counter;
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-join", crab::outs() << "[reduced join]\n"
@@ -1073,12 +1269,16 @@ public:
                                              << *this << "\nwith\n"
                                              << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       this2.m_coeff_map.join(other.m_coeff_map);
+#endif
       this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
       other2.counter = other2.counter ? other2.counter : this2.counter;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       other2.m_coeff_map.join(m_coeff_map);
+#endif
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-join", crab::outs() << "[reduced join]\n"
                                              << this2 << "\nwith\n"
@@ -1101,12 +1301,16 @@ public:
       CRAB_LOG("tvpi-dbm-meet", crab::outs() << "[meet]\n"
                                              << *this << "\nwith\n"
                                              << other << "\n");
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       m_coeff_map.meet(other.m_coeff_map);
+#endif
       counter = counter ? counter : other.counter;
       tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
       other2.counter = other2.counter ? other2.counter : counter;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       other2.m_coeff_map.meet(m_coeff_map);
+#endif
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-meet", crab::outs() << "[reduced meet]\n"
                                              << *this << "\nwith\n"
@@ -1130,11 +1334,15 @@ public:
                                              << *this << "\nwith\n"
                                              << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       this2.m_coeff_map.meet(other.m_coeff_map);
+#endif
       this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       other2.m_coeff_map.meet(m_coeff_map);
+#endif
       other2.counter = other2.counter ? other2.counter : this2.counter;
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-meet", crab::outs() << "[reduced meet]\n"
@@ -1160,11 +1368,15 @@ public:
                                               << *this << "\nwith\n"
                                               << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       this2.m_coeff_map.join(other.m_coeff_map);
+#endif
       this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       other2.m_coeff_map.join(m_coeff_map);
+#endif
       other2.counter = other2.counter ? other2.counter : this2.counter;
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-widen", crab::outs() << "[reduced widen]\n"
@@ -1173,10 +1385,15 @@ public:
       base_domain_t out_base_absval =
           this2.m_base_absval || other2.m_base_absval;
       base_domain_t out_ext_absval = this2.m_ext_absval || other2.m_ext_absval;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       coefficient_map_t out_coeff_map = this2.m_coeff_map;
       tvpi_dbm_domain_t res(std::move(out_base_absval),
                             std::move(out_ext_absval),
                             std::move(out_coeff_map));
+#else
+      tvpi_dbm_domain_t res(std::move(out_base_absval),
+                            std::move(out_ext_absval));
+#endif
       res.counter = this2.counter ? this2.counter : other2.counter;
       res.filter_dbms();
       res.prune_coefficients();
@@ -1197,11 +1414,15 @@ public:
                                               << *this << "\nwith\n"
                                               << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       this2.m_coeff_map.join(other.m_coeff_map);
+#endif
       this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       other2.m_coeff_map.join(m_coeff_map);
+#endif
       other2.counter = other2.counter ? other2.counter : this2.counter;
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-widen", crab::outs() << "[reduced widen]\n"
@@ -1211,10 +1432,15 @@ public:
           this2.m_base_absval.widening_thresholds(other2.m_base_absval, ts);
       base_domain_t out_ext_absval =
           this2.m_ext_absval.widening_thresholds(other2.m_ext_absval, ts);
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       coefficient_map_t out_coeff_map = this2.m_coeff_map;
       tvpi_dbm_domain_t res(std::move(out_base_absval),
                             std::move(out_ext_absval),
                             std::move(out_coeff_map));
+#else
+      tvpi_dbm_domain_t res(std::move(out_base_absval),
+                            std::move(out_ext_absval));
+#endif
       res.counter = this2.counter ? this2.counter : other2.counter;
       res.filter_dbms();
       res.prune_coefficients();
@@ -1233,11 +1459,15 @@ public:
                                                << *this << "\nwith\n"
                                                << other << "\n");
       tvpi_dbm_domain_t this2 = *this;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       this2.m_coeff_map.meet(other.m_coeff_map);
+#endif
       this2.counter = this2.counter ? this2.counter : other.counter;
       this2.tvpi_reduce();
       tvpi_dbm_domain_t other2 = other;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       other2.m_coeff_map.meet(m_coeff_map);
+#endif
       other2.counter = other2.counter ? other2.counter : this2.counter;
       other2.tvpi_reduce();
       CRAB_LOG("tvpi-dbm-narrow", crab::outs() << "[reduced narrow]\n"
@@ -1246,10 +1476,15 @@ public:
       base_domain_t out_base_absval =
           this2.m_base_absval && other2.m_base_absval;
       base_domain_t out_ext_absval = this2.m_ext_absval && other2.m_ext_absval;
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       coefficient_map_t out_coeff_map = this2.m_coeff_map;
       tvpi_dbm_domain_t res(std::move(out_base_absval),
                             std::move(out_ext_absval),
                             std::move(out_coeff_map));
+#else
+      tvpi_dbm_domain_t res(std::move(out_base_absval),
+                            std::move(out_ext_absval));
+#endif
       res.counter = this2.counter ? this2.counter : other2.counter;
       CRAB_LOG("tvpi-dbm-narrow", crab::outs() << "[res]\n" << res << "\n");
       return res;
@@ -1257,8 +1492,8 @@ public:
   }
 
   void operator+=(const linear_constraint_system_t &csts) override {
-    CRAB_LOG("tvpi-dbm", crab::outs() << "assume(" << csts
-                                      << ")\nBefore: " << *this << "\n");
+    CRAB_LOG("tvpi-dbm-+=",
+             crab::outs() << "Before assume(" << csts << ")=" << *this << "\n");
     if (!is_bottom()) {
       for (auto const &cst : csts) {
         if (cst.is_contradiction()) {
@@ -1270,8 +1505,8 @@ public:
           continue;
         }
 
-        CRAB_LOG("tvpi-dbm", crab::outs()
-                                 << "processing original: " << cst << "\n");
+        CRAB_LOG("tvpi-dbm-+=", crab::outs()
+                                    << "processing original: " << cst << "\n");
 
         m_base_absval += cst;
         if (m_base_absval.is_bottom()) {
@@ -1280,10 +1515,12 @@ public:
         }
         auto ecst = rewrite_linear_constraint(cst);
         if (ecst.equal(cst)) {
+          CRAB_LOG("tvpi-dbm-+=", crab::outs()
+                                      << "cannot rewrite: " << cst << "\n");
           continue;
         }
-        CRAB_LOG("tvpi-dbm", crab::outs()
-                                 << "processing rewritten: " << ecst << "\n");
+        CRAB_LOG("tvpi-dbm-+=", crab::outs()
+                                    << "processing rewritten " << ecst << "\n");
         m_ext_absval += ecst;
         if (m_ext_absval.is_bottom()) {
           set_to_bottom();
@@ -1294,8 +1531,8 @@ public:
       tvpi_reduce();
     }
 
-    CRAB_LOG("tvpi-dbm", crab::outs() << "assume(" << csts
-                                      << ")\nAfter: " << *this << "\n");
+    CRAB_LOG("tvpi-dbm-+=",
+             crab::outs() << "After assume(" << csts << ")=" << *this << "\n");
   }
 
   bool entails(const linear_constraint_t &cst) const override {
@@ -1340,57 +1577,32 @@ public:
   }
 
   void assign(const variable_t &x, const linear_expression_t &e) override {
+    // x := c1*x1 + c2*x2 +... + k
+
+    // For DBM, if we have complex linear expression, we can only approximate
+    // values c1*x1 + c2*x2 +... + k Thus, to gain precision, we handle several
+    // special cases: (1) e == cosntant (2) e == b*y +/- c (3) e == b*y +/- c*z
+    // +/- d (4) e == general form Not necessary to rewrite: rewrite("x := e") =
+    // "x*COEF := e*COEF" since this new constraint is equivalent to original if
+    // necessary, the new constraint can be recover by using reduction.
     if (!is_bottom()) {
-      CRAB_LOG("tvpi-dbm", crab::outs() << "Before assign(" << x << " := " << e
-                                        << ")=" << *this << "\n");
-      CRAB_LOG("tvpi-dbm", crab::outs() << "processing original: " << x
-                                        << " := " << e << "\n");
+      CRAB_LOG("tvpi-dbm-assign", crab::outs()
+                                      << "Before assign(" << x << " := " << e
+                                      << ")=" << *this << "\n");
+      CRAB_LOG("tvpi-dbm-assign", crab::outs() << "processing original " << x
+                                               << " := " << e << "\n");
       m_base_absval.assign(x, e);
-      auto ex = e.get_variable();
-      // if (ex && *(ex) == x) {
-      //   // heuristics, based on syntax of expression, x := x +/- c
-      //   // probably some index or counter, add it to extended dbm
-      //   m_ext_absval.assign(x, e);
-      // }
+      rewrite_assign(x, e, false /*weak*/);
 
-      linear_expression_t e1 = rewrite_linear_expression(e);
-      if (!e1.equal(e)) {
-        CRAB_LOG("tvpi-dbm", crab::outs() << "processing rewritten" << x
-                                          << " := " << e1 << "\n");
-        m_ext_absval.assign(x, e1);
-      }
-
-      auto it = m_coeff_map.find(x);
-      if (it == m_coeff_map.end()) {
-        return;
-      }
-      auto &coeffs = it->second;
-      for (auto coefficient : coeffs) {
-        rewrite_assign(x, e, coefficient, false /*!weak*/);
-      }
-
-      CRAB_LOG("tvpi-dbm", crab::outs() << "After assign(" << x << " := " << e
-                                        << ")=" << *this << "\n");
+      CRAB_LOG("tvpi-dbm-assign", crab::outs() << "After assign(" << x << " := "
+                                               << e << ")=" << *this << "\n");
     }
   }
 
   void weak_assign(const variable_t &x, const linear_expression_t &e) override {
     if (!is_bottom()) {
       m_base_absval.weak_assign(x, e);
-
-      linear_expression_t e1 = rewrite_linear_expression(e);
-      if (!e1.equal(e)) {
-        m_ext_absval.weak_assign(x, e1);
-      }
-
-      auto it = m_coeff_map.find(x);
-      if (it == m_coeff_map.end()) {
-        return;
-      }
-      auto &coeffs = it->second;
-      for (auto coefficient : coeffs) {
-        rewrite_assign(x, e, coefficient, true /*weak*/);
-      }
+      rewrite_assign(x, e, true /*weak*/);
     }
   }
 
@@ -1407,22 +1619,35 @@ public:
       case OP_ADDITION:
       case OP_SUBTRACTION:
         if (x == y && counter && *counter != x) { // x := x +/- z
-          // hint: this might be an index or a counter, add it to extended
-          // value
+// hint: this might be an index or a counter, add it to extended
+// value
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
           m_coeff_map.insert({*counter, convert(z)});
+#endif
         }
         break;
       case OP_MULTIPLICATION: // x := y * z
         if (z_abs > number_t(1)) {
-          // "x := zy for z > 1"
+// "x := zy for z > 1"
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
           m_ext_absval.apply(op, x, get_ghost_var(y, z_abs), sign_one);
+#else
+          if (find_ghost_var(y, z_abs)) {
+            m_ext_absval.apply(op, x, get_ghost_var(y, z_abs), sign_one);
+          }
+#endif
         }
         break;
-      case OP_SDIV: // x := y /s z
-      case OP_UDIV: // x := y /u z
-        if (z_abs > number_t(1)) {
-          // "zx := y for z > 1"
+      case OP_SDIV:                // x := y /s z
+      case OP_UDIV:                // x := y /u z
+        if (z_abs > number_t(1)) { // "zx := y for z > 1"
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
           m_ext_absval.apply(op, get_ghost_var(x, z_abs), y, sign_one);
+#else
+          if (find_ghost_var(x, z_abs)) {
+            m_ext_absval.apply(op, get_ghost_var(x, z_abs), y, sign_one);
+          }
+#endif
         }
         break;
       case OP_SREM: // x := y %/s z
@@ -1442,11 +1667,15 @@ public:
         }
       }
 
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       auto it = m_coeff_map.find(x);
       if (it == m_coeff_map.end()) {
         return;
       }
       auto &coeffs = it->second;
+#else
+      auto &coeffs = crab_domain_params_man::get().coefficients();
+#endif
       for (auto coefficient : coeffs) {
         rewrite_apply(op, x, y, z, coefficient);
       }
@@ -1492,11 +1721,15 @@ public:
           m_ext_absval.apply(op, x, y, z);
         }
       }
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       auto it = m_coeff_map.find(x);
       if (it == m_coeff_map.end()) {
         return;
       }
       auto &coeffs = it->second;
+#else
+      auto &coeffs = crab_domain_params_man::get().coefficients();
+#endif
       for (auto coefficient : coeffs) {
         rewrite_apply(op, x, y, z, coefficient);
       }
@@ -1604,16 +1837,22 @@ public:
       m_base_absval -= var;
       m_ext_absval -= var;
 
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       auto it = m_coeff_map.find(var);
       if (it == m_coeff_map.end()) {
         return;
       }
       auto &coeffs = it->second;
+#else
+      auto &coeffs = crab_domain_params_man::get().coefficients();
+#endif
       for (auto coefficient : coeffs) {
         variable_t ghost_var = get_ghost_var(var, coefficient);
         m_ext_absval -= ghost_var;
       }
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       m_coeff_map.remove(var);
+#endif
     }
   }
 
@@ -1638,6 +1877,7 @@ public:
       m_base_absval.forget(variables);
       variable_vector_t allvars(variables);
       for (auto const &v : variables) {
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
         auto it = m_coeff_map.find(v);
         if (it != m_coeff_map.end()) {
           for (auto coefficient : it->second) {
@@ -1646,6 +1886,13 @@ public:
           }
           m_coeff_map.remove(v);
         }
+#else
+        auto &coeffs = crab_domain_params_man::get().coefficients();
+        for (auto coefficient : coeffs) {
+          variable_t gv = get_ghost_var(v, coefficient);
+          allvars.push_back(gv);
+        }
+#endif
       }
       m_ext_absval.forget(allvars);
     }
@@ -1656,6 +1903,7 @@ public:
       m_base_absval.project(variables);
       variable_vector_t allvars(variables);
       for (auto const &v : variables) {
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
         auto it = m_coeff_map.find(v);
         if (it != m_coeff_map.end()) {
           for (auto coefficient : it->second) {
@@ -1663,9 +1911,18 @@ public:
             allvars.push_back(gv);
           }
         }
+#else
+        auto &coeffs = crab_domain_params_man::get().coefficients();
+        for (auto coefficient : coeffs) {
+          variable_t gv = get_ghost_var(v, coefficient);
+          allvars.push_back(gv);
+        }
+#endif
       }
       m_ext_absval.project(allvars);
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
       m_coeff_map.keep(variables);
+#endif
     }
   }
 
@@ -1678,6 +1935,7 @@ public:
       for (unsigned i = 0, sz = from.size(); i < sz; ++i) {
         const variable_t &f = from[i];
         const variable_t &t = to[i];
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
         auto it = m_coeff_map.find(f);
         if (it != m_coeff_map.end()) {
           for (auto coefficient : it->second) {
@@ -1688,6 +1946,13 @@ public:
           m_coeff_map.insert({t, std::move(set2)});
           m_coeff_map.remove(f);
         }
+#else
+        auto &coeffs = crab_domain_params_man::get().coefficients();
+        for (auto coefficient : coeffs) {
+          extd_from.push_back(get_ghost_var(f, coefficient));
+          extd_to.push_back(get_ghost_var(t, coefficient));
+        }
+#endif
       }
       m_ext_absval.rename(extd_from, extd_to);
     }
@@ -1699,7 +1964,7 @@ public:
     }
 
     m_base_absval.expand(var, new_var);
-
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
     auto it = m_coeff_map.find(var);
     if (it != m_coeff_map.end()) {
       for (auto coefficient : it->second) {
@@ -1710,10 +1975,18 @@ public:
       auto set2 = it->second;
       m_coeff_map.insert({new_var, std::move(set2)});
     }
+#else
+    auto &coeffs = crab_domain_params_man::get().coefficients();
+    for (auto coefficient : coeffs) {
+      variable_t gv = get_ghost_var(var, coefficient);
+      variable_t gnv = get_ghost_var(new_var, coefficient);
+      m_ext_absval.expand(gv, gnv);
+    }
+#endif
   }
 
-  void normalize() override { normalize_dbms(); }
-  void minimize() override { filter_dbms(); }
+  void normalize() override {}
+  void minimize() override {}
 
   void intrinsic(std::string name, const variable_or_constant_vector_t &inputs,
                  const variable_vector_t &outputs) override {
@@ -1749,7 +2022,12 @@ public:
       o << "{";
       {
         o << "coeffs:";
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
         m_coeff_map.write(o);
+#else
+        tvpi_utils::print_vector(o,
+                                 crab_domain_params_man::get().coefficients());
+#endif
         o << ", ";
       }
       o << "base:";

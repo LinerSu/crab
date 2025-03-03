@@ -1,5 +1,5 @@
-#include "../../program_options.hpp"
 #include "../../common.hpp"
+#include "../../program_options.hpp"
 
 #include <crab/domains/tvpi_dbm.hpp>
 
@@ -41,6 +41,11 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+#if TVPI_DBM_FIXED_COEFFICIENTS
+  auto &coeffs = crab_domain_params_man::get().coefficients();
+  coeffs.insert(coeffs.end(), {2, 3, 4});
+#endif
+
   variable_factory_t vfac;
   z_var x(vfac["x"], crab::INT_TYPE, 32);
   z_var y(vfac["y"], crab::INT_TYPE, 32);
@@ -50,6 +55,32 @@ int main(int argc, char **argv) {
   z_var i(vfac["i"], crab::INT_TYPE, 32);
   z_var j(vfac["j"], crab::INT_TYPE, 32);
   z_var k(vfac["k"], crab::INT_TYPE, 32);
+
+  { // test assign
+    crab::outs() << "\n\n---- test assignment ----\n\n";
+    test_domain_t dom1;
+    // dom1 : x = 1, y = 2x, z = 3x + 7, n = 2x + 2y + 5, o = -2k - 5, k = 5
+    dom1.assign(x, z_number(1));
+    dom1.assign(y, x * z_number(2));
+    dom1.assign(z, x * z_number(3) + z_number(7));
+    dom1.assign(n, x * z_number(2) + y * z_number(2) + z_number(5));
+    dom1.assign(o, z_number(-2) * k - z_number(5));
+    dom1.assign(k, z_number(0) * o + z_number(5));
+    crab::outs() << "Dom1=" << dom1 << "\n";
+  }
+
+  { // test +=
+    crab::outs() << "\n\n---- test assume ----\n\n";
+    test_domain_t dom1;
+    // dom1 : x = 1, y = 2x, z = 3x + 7, 5x + 6n = 4, 3z + 6y + 9k == 15
+    dom1 += (x == z_number(1));
+    dom1 += (y == x * z_number(2));
+    dom1 += (z == x * z_number(3) + z_number(7));
+    dom1 += (x * z_number(5) + z_number(6) * n == z_number(4));
+    dom1 +=
+        (z * z_number(3) + y * z_number(6) + k * z_number(9) == z_number(15));
+    crab::outs() << "Dom1=" << dom1 << "\n";
+  }
 
   { // test 1
     crab::outs() << "\n\n---- case " << idx << "----\n\n";
@@ -61,7 +92,7 @@ int main(int argc, char **argv) {
 
     // dom2 : x = 2, y = 3x, z = 4x
     dom2 += (x == z_number(2));
-    dom2 += (y == x * z_number(3) );
+    dom2 += (y == x * z_number(3));
     dom2 += (z == x + x + x + x);
 
     perfrom_domain_operations(dom1, dom2);
@@ -159,7 +190,7 @@ int main(int argc, char **argv) {
   }
 
   { // test 4
-    crab::outs() << "\n\n---- case "<<idx<<"---- \n\n";
+    crab::outs() << "\n\n---- case " << idx << "---- \n\n";
     test_domain_t dom1, dom2;
     // dom1 : x >= 5, y = 4x + 2, z = 2x + 3y
     dom1 += (x >= z_number(5));
@@ -186,11 +217,11 @@ int main(int argc, char **argv) {
     // z - 4x <= -1 && 4x - y <= -17 => z - y <= -18 This is done by closure
     check = dom2.entails(z <= y);
     crab::outs() << "assert(z <= y): " << (check ? "true" : "false") << "\n";
-    idx ++;
+    idx++;
   }
 
   { // test 5
-    crab::outs() << "\n\n---- case "<<idx<<"---- \n\n";
+    crab::outs() << "\n\n---- case " << idx << "---- \n\n";
     // dom1 : x - y <= 4, 2y - x <= -3, 3x - y <= 5
     test_domain_t dom1;
     dom1 += (x - y <= z_number(4));
@@ -219,25 +250,23 @@ int main(int argc, char **argv) {
     bool l2 = dom2 <= dom4;
     crab::outs() << "Dom1 <= Dom4 = " << (l1 ? "true" : "false") << "\n";
     crab::outs() << "Dom2 <= Dom4 = " << (l2 ? "true" : "false") << "\n";
-    idx ++;
+    idx++;
   }
 
   { // test 6
-    crab::outs() << "\n\n---- case "<<idx<<"---- \n\n";
+    crab::outs() << "\n\n---- case " << idx << "---- \n\n";
     // dom1 : 2x - y <= 5, 3y - x <= 7, -3x + y <= 4
     test_domain_t dom1;
     dom1 += (z_number(2) * x - y <= z_number(5));
     dom1 += (z_number(3) * y - x <= z_number(7));
-    dom1 += (- z_number(3) * x + y <= z_number(4));
-    crab::outs() << "original dom1=" << dom1 << "\n";
+    dom1 += (-z_number(3) * x + y <= z_number(4));
     crab::outs() << "dom1=" << dom1 << "\n";
 
-    // dom2 : 3x − 2y <= 8, 4y - x <= 10, -2x - 3y <= -6
+    // dom2 : 3x − 2y <= 8, 4y - x <= 10, 2x - 3y <= -6
     test_domain_t dom2;
     dom2 += (z_number(3) * x - z_number(2) * y <= z_number(8));
     dom2 += (z_number(4) * y - x <= z_number(10));
     dom2 += (z_number(2) * x - z_number(3) * y <= z_number(-6));
-    crab::outs() << "original dom2=" << dom2 << "\n";
     crab::outs() << "dom2=" << dom2 << "\n";
 
     test_domain_t dom3 = dom1 | dom2;
@@ -252,11 +281,11 @@ int main(int argc, char **argv) {
     bool l2 = dom2 <= dom4;
     crab::outs() << "Dom1 <= Dom4 = " << (l1 ? "true" : "false") << "\n";
     crab::outs() << "Dom2 <= Dom4 = " << (l2 ? "true" : "false") << "\n";
-    idx ++;
+    idx++;
   }
 
   { // test 7
-    crab::outs() << "\n\n---- case "<<idx<<"---- \n\n";
+    crab::outs() << "\n\n---- case " << idx << "---- \n\n";
     z_var isz(vfac["t"], crab::INT_TYPE, 32);
     z_var len(vfac["l"], crab::INT_TYPE, 32);
     z_var tsz(vfac["s"], crab::INT_TYPE, 32);
@@ -281,7 +310,7 @@ int main(int argc, char **argv) {
   }
 
   { // test 8
-    crab::outs() << "\n\n---- case "<<idx<<"---- \n\n";
+    crab::outs() << "\n\n---- case " << idx << "---- \n\n";
     test_domain_t dom1;
     // dom1 : x \in [1, 10], y = 2x, y <= z
     dom1 += (x >= z_number(1));
@@ -298,7 +327,7 @@ int main(int argc, char **argv) {
     crab::outs() << "dom1=" << dom1 << "\n";
     bool ret = dom1.entails(n <= z);
     crab::outs() << "assert(n <= z): " << (ret ? "true" : "false") << "\n";
-    idx ++;
+    idx++;
   }
 
   return 0;

@@ -12,13 +12,14 @@ z_cfg_t *prog1(variable_factory_t &vfac) {
 
   /*
     int x = nd_int();
-    int y = 2 * x;
+    int y = 2 * x;            // y - 2x <= 0, 2x - y <= 0
     int z = nd_int();
-    int k = 2 * z;
+    int k = 2 * z;            // k - 2z <= 0, 2z - k <= 0
 
-    __CRAB_assert(z - x >= 3);   // EXPECTED OK
+    __CRAB_assume(z - x >= 3); // x - z <= -3
     __CRAB_assert(y == 2 * x);   // EXPECTED OK
-    __CRAB_assert(k - y >= 6);  // EXPECTED OK
+    __CRAB_assert(k - y >= 6);   // EXPECTED OK since 2x - k <= -6 => y - k <= -6
+    __CRAB_assert(2*z - y >= 6); // EXPECTED OK since y - 2z <= -6
    */
   // Defining program variables
   z_var x(vfac["x"], crab::INT_TYPE, 32);
@@ -52,15 +53,15 @@ z_cfg_t *prog2(variable_factory_t &vfac) {
   /*
     int x = nd_int();
     __CRAB_assume(x >= 0);
-    __CRAB_assume(x <= 4);
+    __CRAB_assume(x <= 4);  // x \in [0, 4]
     int y = nd_int();
-    __CRAB_assume(y = 2);
+    __CRAB_assume(y = 2);  // y \in [2, 2]
 
     int z = nd_int();
-    z = x * y;
+    z = x * y;             // z - 2x <= 0, 2x - z <= 0
 
     int m = nd_int();
-    __CRAB_assume(m >= z);
+    __CRAB_assume(m >= z); // z - m <= 0
 
     int j = x - 1;
     int k = j * y;
@@ -115,12 +116,12 @@ z_cfg_t *prog3(variable_factory_t &vfac) {
     int z = nd_int();
     int z' = nd_int();
     int m = nd_int();
-    int y = 2 * n;
+    int y = 2 * n;      // y - 2n <= 0, 2n - y <= 0
 
-    x = 1 * y;
-    z = x;
-    m = y / 1;
-    z' = m;
+    x = 1 * y;          // x - y <= 0, y - x <= 0
+    z = x;              // z - x <= 0, x - z <= 0 => z - y <= 0, y - z <= 0
+    m = y / 1;          // m - y <= 0, y - m <= 0
+    z' = m;             // z' - m <= 0, m - z' <= 0 => z' - y <= 0, y - z' <= 0
 
     __CRAB_assert(z == 2 * n);   // EXPECTED OK
     __CRAB_assert(z' == 2 * n);   // EXPECTED OK
@@ -162,6 +163,11 @@ int main (int argc, char** argv) {
       return 0;
   }
 
+#if TVPI_DBM_FIXED_COEFFICIENTS
+  auto &coeffs = crab_domain_params_man::get().coefficients();
+  coeffs.insert(coeffs.end(), {2, 3, 4});
+#endif
+
   {
     variable_factory_t vfac;
     z_cfg_t *cfg = prog1(vfac);
@@ -171,7 +177,6 @@ int main (int argc, char** argv) {
     run_and_check(cfg, cfg->entry(), init, false, 2, 1, 20, stats_enabled);
     delete cfg;
   }
-  exit(0);
 
   {
     variable_factory_t vfac;

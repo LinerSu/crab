@@ -19,6 +19,11 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+#if TVPI_DBM_FIXED_COEFFICIENTS
+  auto &coeffs = crab_domain_params_man::get().coefficients();
+  coeffs.insert(coeffs.end(), {10, 255});
+#endif
+
   variable_factory_t vfac;
   z_var c(vfac["c"], crab::INT_TYPE, 32);
   z_var x(vfac["x"], crab::INT_TYPE, 32);
