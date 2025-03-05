@@ -994,7 +994,7 @@ public:
                     if (find_ghost_var(x, new_a) && find_ghost_var(z, new_b)) {
                       auto gax_new = get_ghost_var(x, new_a);
                       auto gbz_new = get_ghost_var(z, new_b);
-                      if (tvpi_utils::find(ext_vars, gax_new) &&
+                      if (tvpi_utils::find(ext_vars, gax_new) ||
                           tvpi_utils::find(ext_vars, gbz_new)) {
                         skip = add_tvpi_constraint(gax_new, gbz_new, new_c);
                       }
@@ -1105,7 +1105,7 @@ public:
                     if (find_ghost_var(z, new_a) && find_ghost_var(x, new_b)) {
                       auto gaz_new = get_ghost_var(z, new_a);
                       auto gbx_new = get_ghost_var(x, new_b);
-                      if (tvpi_utils::find(ext_vars, gbx_new) &&
+                      if (tvpi_utils::find(ext_vars, gbx_new) ||
                           tvpi_utils::find(ext_vars, gaz_new)) {
                         skip = add_tvpi_constraint(gaz_new, gbx_new, new_c);
                       }
@@ -1834,6 +1834,9 @@ public:
 
   void operator-=(const variable_t &var) override {
     if (!(is_bottom() || is_top())) {
+      CRAB_LOG("tvpi-dbm-forget", crab::outs() << "Before forget[" << var
+                                               << "]=" << *this << "\n");
+      tvpi_reduce();
       m_base_absval -= var;
       m_ext_absval -= var;
 
@@ -1853,6 +1856,8 @@ public:
 #if TVPI_DBM_FIXED_COEFFICIENTS == 0
       m_coeff_map.remove(var);
 #endif
+      CRAB_LOG("tvpi-dbm-forget", crab::outs()
+                                      << "After forget=" << *this << "\n");
     }
   }
 
@@ -1874,6 +1879,10 @@ public:
 
   void forget(const variable_vector_t &variables) override {
     if (!(is_bottom() || is_top())) {
+      CRAB_LOG("tvpi-dbm-forget", crab::outs() << "Before forget";
+               tvpi_utils::print_vector(crab::outs(), variables);
+               crab::outs() << "=" << *this << "\n");
+      tvpi_reduce();
       m_base_absval.forget(variables);
       variable_vector_t allvars(variables);
       for (auto const &v : variables) {
@@ -1895,6 +1904,8 @@ public:
 #endif
       }
       m_ext_absval.forget(allvars);
+      CRAB_LOG("tvpi-dbm-forget", crab::outs()
+                                      << "After forget=" << *this << "\n");
     }
   }
 
