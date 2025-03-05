@@ -345,13 +345,47 @@ private:
     return linear_constraint_t(res, cst.kind());
   }
 
+  boost::optional<linear_expression_t>
+  try_rewrite_linear_expression(const linear_expression_t &e,
+                                const unsigned &coefficient) const {
+    /**
+     *
+     * Given c1*x1 + c2*x2 + ... + k and a coefficient c, rewrite into:
+     *  c1' = c1 * c, c2' = c2 * c, ..., k' = k * c
+     **/
+    if (e.is_constant()) {
+      return boost::none;
+    }
+    linear_expression_t res;
+    for (auto it = e.begin(), et = e.end(); it != et; ++it) {
+      const variable_t &v = (*it).second;
+      const number_t &coeff = (*it).first;
+      number_t abs_coeff = coeff < 0 ? -coeff : coeff;
+      bool neg = coeff < 0;
+      number_t new_coeff = abs_coeff * number_t(coefficient);
+      auto gv = find_ghost_var(v, new_coeff);
+      if (gv == boost::none) {
+        return boost::none;
+      }
+      if (neg) {
+        res = res - (*gv);
+      } else {
+        res = res + (*gv);
+      }
+    }
+    const number_t k = e.constant();
+    if (k != number_t(0)) {
+      res = res + k * number_t(coefficient);
+    }
+    return res;
+  }
+
   void rewrite_assign(const variable_t &x, const linear_expression_t &e,
                       bool weak) {
     if (e.is_constant()) {
       // (1) e == constant
       CRAB_LOG("tvpi-dbm-assign",
                crab::outs() << "cannot rewrite: " << x << " := " << e << "\n");
-      return;
     } else if (e.size() == 1) {
       // (2) e == b*y +/- c
       auto it = e.begin();
@@ -437,6 +471,9 @@ private:
             }
           }
         }
+      } else {
+        CRAB_LOG("tvpi-dbm-assign", crab::outs() << "cannot rewrite: " << x
+                                                 << " := " << e << "\n");
       }
     } else if (e.size() == 2) {
       // (3) e == b*y +/- c*z +/- d
@@ -490,16 +527,24 @@ private:
         // d) / d "
         // TODO: ignore this for now.
         // number_t d = tvpi_utils::gcd3(abs_b, abs_c, abs_d);
+      } else {
+        CRAB_LOG("tvpi-dbm-assign", crab::outs() << "cannot rewrite: " << x
+                                                 << " := " << e << "\n");
       }
     } else {
       // (4) e == general form
       auto e1 = rewrite_linear_expression(e);
       if (!e1.equal(e)) {
+        CRAB_LOG("tvpi-dbm-assign", crab::outs() << "processing rewritten " << x
+                                                 << " := " << e1 << "\n");
         if (!weak) {
           m_ext_absval.assign(x, e1);
         } else {
           m_ext_absval.weak_assign(x, e1);
         }
+      } else {
+        CRAB_LOG("tvpi-dbm-assign", crab::outs() << "cannot rewrite: " << x
+                                                 << " := " << e << "\n");
       }
     }
   }
@@ -1593,6 +1638,37 @@ public:
                                                << " := " << e << "\n");
       m_base_absval.assign(x, e);
       rewrite_assign(x, e, false /*weak*/);
+      // rewrite x := e as 2x := 2e?
+      // best approximation should be:
+      // for each a in coefficients(x)
+      // try rewrite e as a * e
+      // if successful, then add a * x := a * e
+      // if not, then forget a * x
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
+      auto it = m_coeff_map.find(x);
+      if (it == m_coeff_map.end()) {
+        return;
+      }
+      auto &coeffs = it->second;
+#else
+      auto &coeffs = crab_domain_params_man::get().coefficients();
+#endif
+      for (auto c : coeffs) {
+        auto cx = get_ghost_var(x, c);
+        if (auto ce = try_rewrite_linear_expression(e, c)) {
+          CRAB_LOG("tvpi-dbm-assign", crab::outs()
+                                          << "processing rewritten " << cx
+                                          << " := " << *ce << "\n");
+          m_ext_absval.assign(cx, *ce);
+        } else {
+          m_ext_absval -= cx;
+          CRAB_LOG("tvpi-dbm-assign", crab::outs()
+                                          << "cannot rewrite: " << c << " * "
+                                          << x << " := " << c << " * "
+                                          << "(" << e << ")"
+                                          << "\n");
+        }
+      }
 
       CRAB_LOG("tvpi-dbm-assign", crab::outs() << "After assign(" << x << " := "
                                                << e << ")=" << *this << "\n");
@@ -1603,6 +1679,31 @@ public:
     if (!is_bottom()) {
       m_base_absval.weak_assign(x, e);
       rewrite_assign(x, e, true /*weak*/);
+#if TVPI_DBM_FIXED_COEFFICIENTS == 0
+      auto it = m_coeff_map.find(x);
+      if (it == m_coeff_map.end()) {
+        return;
+      }
+      auto &coeffs = it->second;
+#else
+      auto &coeffs = crab_domain_params_man::get().coefficients();
+#endif
+      for (auto c : coeffs) {
+        auto cx = get_ghost_var(x, c);
+        if (auto ce = try_rewrite_linear_expression(e, c)) {
+          CRAB_LOG("tvpi-dbm-assign", crab::outs()
+                                          << "processing rewritten " << cx
+                                          << " := " << *ce << "\n");
+          m_ext_absval.assign(cx, *ce);
+        } else {
+          m_ext_absval -= cx;
+          CRAB_LOG("tvpi-dbm-assign", crab::outs()
+                                          << "cannot rewrite: " << c << " * "
+                                          << x << " := " << c << " * "
+                                          << "(" << e << ")"
+                                          << "\n");
+        }
+      }
     }
   }
 
