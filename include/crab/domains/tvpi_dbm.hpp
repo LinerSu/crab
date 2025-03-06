@@ -17,10 +17,9 @@
 namespace crab {
 namespace domains {
 
-#define tvpi_dbm_domain_SCOPED_STATS(NAME)                                     \
+#define TVPI_DBM_DOMAIN_SCOPED_STATS(NAME)                                     \
   CRAB_DOMAIN_SCOPED_STATS(this, NAME, 1)
-#define tvpi_dbm_domain_SCOPED_STATS_ASSIGN_CTOR(NAME)                         \
-  CRAB_DOMAIN_SCOPED_STATS(&o, NAME, 0)
+#define TVPI_DBM_DOMAIN_COUNT_STATS(NAME) CRAB_DOMAIN_COUNT_STATS(NAME, 0)
 
 class TVPIDBMDefaultParams {
 public:
@@ -599,6 +598,7 @@ private:
 
   bool add_tvpi_constraint(const variable_t &ax, const variable_t &by,
                            const number_t &c) {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".tvpi");
     // add ax - by <= c
     auto oldcopt = m_ext_absval.difference_bound(by, ax);
     if (!oldcopt || c < *oldcopt) { // if new bound is tighter
@@ -610,6 +610,7 @@ private:
 
   bool add_utvpi_constraint(const variable_t &x, const variable_t &y,
                             const number_t &c) {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".utvpi");
     // add x - y <= c
     auto oldcopt = m_base_absval.difference_bound(y, x);
     if (!oldcopt || c < *oldcopt) { // if new bound is tighter
@@ -620,6 +621,7 @@ private:
   }
 
   bool add_ub_constraint(const variable_t &x, const number_t &ub) {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".ub");
     // add x <= ub
     bound_t x_ub = m_base_absval.at(x).ub();
     bound_t new_ub = bound_t(ub);
@@ -631,6 +633,7 @@ private:
   }
 
   bool add_lb_constraint(const variable_t &x, const number_t &lb) {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".lb");
     // add -x <= lb
     bound_t x_lb = m_base_absval.at(x).lb();
     bound_t new_lb = bound_t(-lb);
@@ -663,7 +666,7 @@ private:
             const variable_t &y, const number_t &c, const unsigned &d,
             const unsigned &e, const boost::optional<variable_t> &z,
             const number_t &f) const {
-
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".resultant");
     // Given two inequalities ax - by <= c and dy - ez <= f, compute the
     // resultant inequalities by eliminating the middle variable y.
     unsigned gcd = tvpi_utils::gcd(b, d);
@@ -705,6 +708,7 @@ private:
             const variable_t &x, const number_t &c, const unsigned &e,
             const boost::optional<variable_t> &z, const unsigned &d,
             const number_t &f) const {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".resultant");
     // Given two inequalities by - ax <= c and ez - dy <= f, compute the
     // resultant inequalities by eliminating the middle variable y.
     unsigned gcd = tvpi_utils::gcd(b, d);
@@ -933,6 +937,7 @@ public:
   }
 
   void tvpi_reduce() {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".reduce");
     CRAB_LOG("tvpi-dbm-reduce", crab::outs()
                                     << "Before reduction: " << *this << "\n");
 
@@ -1046,9 +1051,10 @@ public:
                     }
                   }
                   CRAB_LOG("tvpi-dbm-reduce2",
-                           crab::outs() << "=>>>" << new_a << "*" << x << "-"
-                                        << new_b << "*" << z << "<=" << new_c
-                                        << (skip ? ", skip" : "") << "\n");
+                           crab::outs()
+                               << "=>>>" << new_a << "*" << x << "-" << new_b
+                               << "*" << z << "<=" << new_c
+                               << (skip ? ", skip" : ", added") << "\n");
                 }
                 // ax - by <= c && y <= f => x <= c'
                 auto bnds = m_base_absval.at(y);
@@ -1066,7 +1072,7 @@ public:
                   CRAB_LOG("tvpi-dbm-reduce2",
                            crab::outs()
                                << "=>>>" << new_a << "*" << x << " <= " << new_c
-                               << (skip ? ", skip" : "") << "\n");
+                               << (skip ? ", skip" : ", added") << "\n");
                 }
                 // ax - by <= c && -x <= f => -y <= c'
                 bnds = m_base_absval.at(x);
@@ -1085,7 +1091,7 @@ public:
                            crab::outs()
                                << "=>>>"
                                << "-" << new_b << "*" << y << " <= " << new_c
-                               << (skip ? ", skip" : "") << "\n");
+                               << (skip ? ", skip" : ", added") << "\n");
                 }
               } else if (x != y && !(a == 1 && b == 1) && counter &&
                          (x == *counter || y == *counter)) {
@@ -1109,7 +1115,7 @@ public:
                     CRAB_LOG("tvpi-dbm-reduce2",
                              crab::outs()
                                  << "=>>>" << gax << "-" << gby << " <= " << c_p
-                                 << (skip ? ", skip" : "") << "\n");
+                                 << (skip ? ", skip" : ", added") << "\n");
                   }
                 }
               }
@@ -1157,9 +1163,10 @@ public:
                     }
                   }
                   CRAB_LOG("tvpi-dbm-reduce2",
-                           crab::outs() << "=>>>" << new_a << "*" << z << "-"
-                                        << new_b << "*" << x << " <= " << new_c
-                                        << (skip ? ", skip" : "") << "\n");
+                           crab::outs()
+                               << "=>>>" << new_a << "*" << z << "-" << new_b
+                               << "*" << x << " <= " << new_c
+                               << (skip ? ", skip" : ", added") << "\n");
                 }
                 // by - ax <= c && x <= f => y <= c'
                 auto bnds = m_base_absval.at(x);
@@ -1177,7 +1184,7 @@ public:
                   CRAB_LOG("tvpi-dbm-reduce2",
                            crab::outs()
                                << "=>>>" << new_a << "*" << y << "<=" << new_c
-                               << (skip ? ", skip" : "") << "\n");
+                               << (skip ? ", skip" : ", added") << "\n");
                 }
                 // by - ax <= c && -y <= f => -x <= c'
                 bnds = m_base_absval.at(y);
@@ -1196,7 +1203,7 @@ public:
                            crab::outs()
                                << "=>>>"
                                << "-" << new_b << "*" << x << " <= " << new_c
-                               << (skip ? ", skip" : "") << "\n");
+                               << (skip ? ", skip" : ", added") << "\n");
                 }
               } else if (x != y && !(a == 1 && b == 1) && counter &&
                          (x == *counter || y == *counter)) {
@@ -1218,7 +1225,7 @@ public:
                     CRAB_LOG("tvpi-dbm-reduce2",
                              crab::outs()
                                  << "=>>>" << gby << "-" << gax << " <= " << c_p
-                                 << (skip ? ", skip" : "") << "\n");
+                                 << (skip ? ", skip" : ", added") << "\n");
                   }
                 }
               }
@@ -1239,6 +1246,7 @@ public:
   }
 
   bool operator<=(const tvpi_dbm_domain_t &other) const override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".leq");
     if (is_bottom() || other.is_top()) {
       return true;
     } else if (is_top() || other.is_bottom()) {
@@ -1274,6 +1282,7 @@ public:
   }
 
   void operator|=(const tvpi_dbm_domain_t &other) override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".self_join");
     if (is_bottom() || other.is_top()) {
       *this = other;
     } else if (other.is_bottom() || is_top()) {
@@ -1305,6 +1314,7 @@ public:
   }
 
   tvpi_dbm_domain_t operator|(const tvpi_dbm_domain_t &other) const override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".join");
     if (is_bottom() || other.is_top()) {
       return other;
     } else if (other.is_bottom() || is_top()) {
@@ -1338,6 +1348,7 @@ public:
   }
 
   void operator&=(const tvpi_dbm_domain_t &other) override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".self_meet");
     if (is_bottom() || other.is_top()) {
       // do nothing
     } else if (other.is_bottom() || is_top()) {
@@ -1370,6 +1381,7 @@ public:
   }
 
   tvpi_dbm_domain_t operator&(const tvpi_dbm_domain_t &other) const override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".meet");
     if (is_bottom() || other.is_top()) {
       return *this;
     } else if (other.is_bottom() || is_top()) {
@@ -1404,6 +1416,7 @@ public:
   }
 
   tvpi_dbm_domain_t operator||(const tvpi_dbm_domain_t &other) const override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".widen");
     if (is_bottom() || other.is_top()) {
       return other;
     } else if (other.is_bottom() || is_top()) {
@@ -1450,6 +1463,7 @@ public:
   tvpi_dbm_domain_t
   widening_thresholds(const tvpi_dbm_domain_t &other,
                       const thresholds<number_t> &ts) const override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".widen.thresholds");
     if (is_bottom() || other.is_top()) {
       return other;
     } else if (other.is_bottom() || is_top()) {
@@ -1495,6 +1509,7 @@ public:
   }
 
   tvpi_dbm_domain_t operator&&(const tvpi_dbm_domain_t &other) const override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".narrow");
     if (is_bottom() || other.is_top()) {
       return *this;
     } else if (other.is_bottom() || is_top()) {
@@ -1537,6 +1552,7 @@ public:
   }
 
   void operator+=(const linear_constraint_system_t &csts) override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".+=");
     CRAB_LOG("tvpi-dbm-+=",
              crab::outs() << "Before assume(" << csts << ")=" << *this << "\n");
     if (!is_bottom()) {
@@ -1581,6 +1597,7 @@ public:
   }
 
   bool entails(const linear_constraint_t &cst) const override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".entails");
     if (is_bottom()) {
       return true;
     } else if (cst.is_tautology()) {
@@ -1622,6 +1639,7 @@ public:
   }
 
   void assign(const variable_t &x, const linear_expression_t &e) override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".assign");
     // x := c1*x1 + c2*x2 +... + k
 
     // For DBM, if we have complex linear expression, we can only approximate
@@ -1694,7 +1712,7 @@ public:
           CRAB_LOG("tvpi-dbm-assign", crab::outs()
                                           << "processing rewritten " << cx
                                           << " := " << *ce << "\n");
-          m_ext_absval.assign(cx, *ce);
+          m_ext_absval.weak_assign(cx, *ce);
         } else {
           m_ext_absval -= cx;
           CRAB_LOG("tvpi-dbm-assign", crab::outs()
@@ -1709,6 +1727,7 @@ public:
 
   void apply(arith_operation_t op, const variable_t &x, const variable_t &y,
              number_t z) override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".apply");
     if (!is_bottom()) {
       m_base_absval.apply(op, x, y, z);
       bool neg = (z < 0);
@@ -1812,6 +1831,7 @@ public:
 
   void apply(arith_operation_t op, const variable_t &x, const variable_t &y,
              const variable_t &z) override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".applyv");
     if (!is_bottom()) {
       m_base_absval.apply(op, x, y, z);
       eval_apply(op, x, y, z);
@@ -1934,6 +1954,7 @@ public:
   }
 
   void operator-=(const variable_t &var) override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".-=");
     if (!(is_bottom() || is_top())) {
       CRAB_LOG("tvpi-dbm-forget", crab::outs() << "Before forget[" << var
                                                << "]=" << *this << "\n");
@@ -1979,6 +2000,7 @@ public:
   }
 
   void forget(const variable_vector_t &variables) override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".forget");
     if (!(is_bottom() || is_top())) {
       CRAB_LOG("tvpi-dbm-forget", crab::outs() << "Before forget";
                tvpi_utils::print_vector(crab::outs(), variables);
@@ -2011,6 +2033,7 @@ public:
   }
 
   void project(const variable_vector_t &variables) override {
+    TVPI_DBM_DOMAIN_SCOPED_STATS(".project");
     if (!is_bottom()) {
       m_base_absval.project(variables);
       variable_vector_t allvars(variables);
