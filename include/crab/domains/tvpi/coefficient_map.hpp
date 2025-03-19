@@ -44,6 +44,31 @@ void print_set(crab::crab_os &o, const std::unordered_set<TType> &s) {
   o << ")";
 }
 
+template <typename KType, typename VType>
+void print_map(crab::crab_os &o,
+               const boost::container::flat_map<KType, VType> &m) {
+  typename boost::container::flat_map<KType, VType>::const_iterator it;
+  o << "{";
+  for (it = m.begin(); it != m.end(); it++) {
+    if (it != m.begin())
+      o << ",";
+    o << it->first << "=>" << it->second;
+  }
+  o << "}";
+}
+
+template <typename KType, typename VType>
+void print_map(crab::crab_os &o, const std::unordered_map<KType, VType> &m) {
+  typename std::unordered_map<KType, VType>::const_iterator it;
+  o << "{";
+  for (it = m.begin(); it != m.end(); it++) {
+    if (it != m.begin())
+      o << ",";
+    o << it->first << "=>" << it->second;
+  }
+  o << "}";
+}
+
 /// @brief a special method for find a value in a vector
 /// @tparam T a type of the vector item
 /// @param vec the vector for searching
