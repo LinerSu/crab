@@ -28,6 +28,27 @@ void print_vector(crab::crab_os &o, const std::vector<TType> &vec) {
   o << "]";
 }
 
+/// @brief a special log method to print vector with optional items
+/// @tparam TType
+/// @param o crab ostream
+/// @param vec the vector for printing
+template <typename TType>
+void print_vector(crab::crab_os &o,
+                  const std::vector<boost::optional<TType>> &vec) {
+  typename std::vector<boost::optional<TType>>::const_iterator it;
+  o << "[";
+  for (it = vec.begin(); it != vec.end(); it++) {
+    if (it != vec.begin())
+      o << ",";
+    if (*it == boost::none) {
+      o << "none";
+    } else {
+      o << **it;
+    }
+  }
+  o << "]";
+}
+
 /// @brief a special log method to print unordered set
 /// @tparam TType
 /// @param o crab ostream
