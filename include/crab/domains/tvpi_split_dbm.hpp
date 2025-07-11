@@ -31,6 +31,10 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-compare"
 
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+#define LOCATION_STRING (__FILE__ ":" STR(__LINE__))
+
 namespace crab {
 namespace domains {
 
@@ -222,9 +226,9 @@ public:
 };
 
 #define TVPI_SPLIT_DBM_DOMAIN_SCOPED_STATS(NAME)                               \
-  CRAB_DOMAIN_SCOPED_STATS(this, NAME, 1)
+  CRAB_DOMAIN_SCOPED_STATS(this, NAME, 0)
 #define TVPI_TVPI_SPLIT_DBM_DOMAIN_SCOPED_STATS_ASSIGN_CTOR(NAME)              \
-  CRAB_DOMAIN_SCOPED_STATS(&o, NAME, 1)
+  CRAB_DOMAIN_SCOPED_STATS(&o, NAME, 0)
 
 template <class Number, class VariableName,
           class DBMParams = DBM_impl::DefaultParams<Number>,
@@ -375,22 +379,22 @@ protected:
     return get_vert(key_t(v, coefficient));
   }
 
-  boost::optional<vert_id> get_vert(const variable_t &v,
-                                    const unsigned &coefficient) const {
-    return get_vert(key_t(v, coefficient));
-  }
-
-  boost::optional<vert_id> get_vert(const variable_t &v) const {
-    return get_vert(v, 1);
-  }
-
-  boost::optional<vert_id> get_vert(const key_t &k) const {
+  boost::optional<vert_id> get_vert_opt(const key_t &k) const {
     auto it = vert_map.find(k);
     if (it != vert_map.end()) {
       return (*it).second;
     } else {
       return boost::none;
     }
+  }
+
+  boost::optional<vert_id> get_vert_opt(const variable_t &v,
+                                        const unsigned &coefficient) const {
+    return get_vert_opt(key_t(v, coefficient));
+  }
+
+  boost::optional<vert_id> get_vert_opt(const variable_t &v) const {
+    return get_vert_opt(v, 1);
   }
 
 #pragma endregion Vertex
@@ -767,6 +771,55 @@ protected:
         });
   }
 
+  boost::optional<linear_expression_t>
+  try_rewrite_linear_expression(const linear_expression_t &e,
+                                const unsigned &coefficient) const {
+    /**
+     *
+     * Given c1*x1 + c2*x2 + ... + k and a coefficient c, rewrite into:
+     *  c1' = c1 * c, c2' = c2 * c, ..., k' = k * c
+     **/
+    if (e.is_constant()) {
+      return boost::none;
+    }
+    linear_expression_t res;
+    for (auto it = e.begin(), et = e.end(); it != et; ++it) {
+      const variable_t &v = (*it).second;
+      const number_t &coeff = (*it).first;
+      bool neg = coeff < 0;
+      number_t abs_coeff = coeff < 0 ? -coeff : coeff;
+      if (abs_coeff == number_t(0)) {
+        continue;
+      }
+      number_t new_coeff = abs_coeff * number_t(coefficient);
+      boost::optional<vert_id> gv = get_vert_opt(v, ntoc::convert(new_coeff));
+      if (gv == boost::none) {
+        return boost::none;
+      }
+      if (neg) {
+        res = res - new_coeff * v;
+      } else {
+        res = res + new_coeff * v;
+      }
+    }
+    const number_t k = e.constant();
+    if (k != number_t(0)) {
+      res = res + k * number_t(coefficient);
+    }
+    return res;
+  }
+
+  boost::optional<linear_constraint_t>
+  try_rewrite_linear_constraint(const linear_constraint_t &cst,
+                                const unsigned &coefficient) const {
+    auto ce = try_rewrite_linear_expression(cst.expression(), coefficient);
+    if (ce == boost::none) {
+      return boost::none;
+    } else {
+      return linear_constraint_t(*ce, cst.kind());
+    }
+  }
+
   bool add_linear_leq(const linear_expression_t &exp) {
     // given a linear expression of the form: a*x + b*y + c*z <= k
     // convert into a*x + b*y + c*z - k <= 0
@@ -785,16 +838,28 @@ protected:
     for (auto &p : lbs) {
       CRAB_LOG("tvpi-dbm-+=", crab::outs()
                                   << p.first << ">=" << p.second << "\n");
-      vert_id v = get_vert(p.first);
-      if (g.lookup(v, 0, w) && w.get() <= -p.second)
-        continue;
-      g.set_edge(v, -p.second, 0);
+      auto c_list = crab_domain_params_man::get().coefficients();
+      c_list.push_back(1); // add 1 to coefficients
+      for (auto &c : c_list) {
+        boost::optional<vert_id> v_opt =
+            c == 1 ? get_vert(p.first, c) : get_vert_opt(p.first, c);
+        if (v_opt == boost::none) {
+          continue;
+        }
+        vert_id v = *v_opt;
+        Wt p_val = p.second * Wt(c);
+        CRAB_LOG("tvpi-dbm-+=2",
+                 crab::outs() << key_t(p.first, c) << ">=" << p_val << "\n");
+        if (g.lookup(v, 0, w) && w.get() <= -p_val)
+          continue;
+        g.set_edge(v, -p_val, 0);
 
-      if (!repair_potential(v, 0)) {
-        set_to_bottom();
-        return false;
+        if (!repair_potential(v, 0)) {
+          set_to_bottom();
+          return false;
+        }
+        check_potential(g, potential, __LINE__);
       }
-      check_potential(g, potential, __LINE__);
     }
     for (auto &p : ubs) {
       CRAB_LOG("tvpi-dbm-+=", crab::outs()
@@ -1058,13 +1123,25 @@ protected:
     CRAB_LOG("tvpi-dbm-tvpi", crab::outs() << "\n===\nBefore:\n";
              tvpi_utils::print_map(crab::outs(), vert_map);
              tvpi_utils::print_map(crab::outs(), tmp_vert_map);
+             tvpi_utils::print_vector(crab::outs(), rev_map);
              crab::outs() << "\n"; crab::outs() << *this << "\n";
              /*print_details(crab::outs());*/);
 
     std::set<vert_id> new_verts;
-    boost::optional<variable_t> changed_var =
-        new_v ? boost::optional<variable_t>(rev_map[new_v.get()].get().var())
-              : boost::none;
+
+    auto is_vert_new = [this, &tmp_vert_map](vert_id v) -> bool {
+      if (v >= rev_map.size()) {
+        CRAB_ERROR(LOCATION_STRING, " Invalid vertex id: ", v,
+                   " out of range.");
+      }
+      if (v == 0) {
+        return false;
+      }
+      if (rev_map[v] == boost::none) {
+        CRAB_ERROR(LOCATION_STRING, "vertex ", v, " has no reverse mapping.");
+      }
+      return tmp_vert_map.find(rev_map[v].get()) != tmp_vert_map.end();
+    };
 
     auto find_vert = [this](key_t k, vert_map_t &vert_map) -> vert_id {
       auto it = vert_map.find(k);
@@ -1119,6 +1196,9 @@ protected:
     key_t by =
         (rev_map[ii] ? key_t(*rev_map[ii]) : key_t((*rev_map[jj]).var(), 0));
     // crab::outs() << "\nNew: " << ax << " - " << by << " <= " << c << "\n";
+    // crab::outs() << "is_new_ax: " << is_new_jj << ", is_new_by: " <<
+    // is_new_ii << "\n";
+
     variable_t x = ax.var();
     if (ax.coeff() > 0) {
       find_keys_with_same_var(is_new_jj, ax.var(),
@@ -1138,7 +1218,7 @@ protected:
       std::vector<std::pair<vert_id, vert_id>> need_to_close2;
       const std::vector<key_t> &keys = forward ? xs.first : ys.first;
       // layer 1: process edges by eliminating x or y
-      for (const auto &k : keys) {
+      for (auto &k : keys) {
         vert_id v = find_vert(
             k, ((forward ? xs.second : ys.second) ? tmp_vert_map : vert_map));
 
@@ -1162,11 +1242,11 @@ protected:
                        ? crab::outs()
                              << "resultant(" << ez << "-" << k << " <= " << f
                              << ", " << ax << "-" << by << " <= " << c
-                             << "), eliminating " << k.var() << "\n"
+                             << "), eliminating " << ax.var() << "\n"
                        : crab::outs()
                              << "resultant(" << ax << "-" << by << " <= " << c
                              << ", " << k << "-" << ez << " <= " << f
-                             << "), eliminating " << k.var() << "\n");
+                             << "), eliminating " << by.var() << "\n");
 
           auto [new_a, new_b, new_c] =
               forward
@@ -1193,34 +1273,22 @@ protected:
           }
           if (!skip) {
             wt_ref_t w;
-            bool src_is_new =
-                changed_var && (new_key_src.var() == *changed_var);
+            bool src_is_new = forward ? is_new_ii : is_vert_new(vez);
             vert_id src = new_b == 0
                               ? 0
                               : find_vert(new_key_src,
                                           src_is_new ? tmp_vert_map : vert_map);
-            bool dest_is_new =
-                changed_var && (new_key_dest.var() == *changed_var);
+            bool dest_is_new = forward ? is_vert_new(vez) : is_new_jj;
             vert_id dest =
                 new_a == 0 ? 0
                            : find_vert(new_key_dest,
                                        dest_is_new ? tmp_vert_map : vert_map);
-            if (g.lookup(src, dest, w)) {
-              if (w.get() <= t) {
-                skip = true;
-              } else {
-                g.update_edge(src, t, dest, min_op);
-                if (!repair_potential(src, dest)) {
-                  assert(0 && "Unreachable");
-                  set_to_bottom();
-                }
-                check_potential(g, potential, __LINE__);
-              }
-            } else {
-              delta.push_back({{src, dest}, {t}});
+            if (g.lookup(src, dest, w) && w.get() <= t) {
+              skip = true;
             }
             if (!skip) {
-              need_to_close.push_back({src, dest});
+              delta.push_back({{src, dest}, {t}});
+              // need_to_close.push_back({src, dest});
             }
           }
           CRAB_LOG("tvpi-dbm-tvpi",
@@ -1229,145 +1297,111 @@ protected:
                        << "<=" << t << (skip ? ", skip" : ", added") << "\n");
         }
       }
-      for (auto &e : delta) { // add new edges
-        g.set_edge(e.first.first, e.second, e.first.second);
-        if (!repair_potential(e.first.first, e.first.second)) {
-          assert(0 && "Unreachable");
-          set_to_bottom();
-        }
-      }
       check_potential(g, potential, __LINE__);
+      GrOps::apply_delta(g, delta); // add new edges
       delta.clear();
-      for (auto sd : need_to_close) {
-        vert_id src = sd.first;
-        vert_id dest = sd.second;
-        if (!repair_potential(src, dest)) {
-          assert(0 && "Unreachable");
-          set_to_bottom();
-        }
-        if (src == 0 || dest == 0) {
-          continue;
-        }
-        check_potential(g, potential, __LINE__);
-        close_over_edge(src, dest);
-        check_potential(g, potential, __LINE__);
-      }
+      check_potential(g, potential, __LINE__);
       // need_to_close.clear();
-      CRAB_LOG("tvpi-dbm-tvpi", crab::outs() << "layer 2\n";);
-      // layer 2: process new edges by eliminating remaining y or x
-      const std::vector<key_t> &keys2 = forward ? ys.first : xs.first;
-      for (const auto &k : keys2) {
-        vert_id v = find_vert(
-            k, ((forward ? ys.second : xs.second) ? tmp_vert_map : vert_map));
-        for (vert_id vgw : (forward ? g.preds(v) : g.succs(v))) {
-          if (rev_map[vgw] == boost::none) {
-            continue;
-          }
-          key_t gw = *rev_map[vgw];
-          if (gw.var() == k.var()) {
-            continue;
-          }
-          if (forward ? (k == ax && gw == by) : (k == by && gw == ax)) {
-            continue;
-          }
-          for (auto sd : need_to_close) {
-            vert_id src = sd.first, dst = sd.second;
-            key_t key_s = *rev_map[src], key_d = *rev_map[dst];
-            if (forward ? gw.var() == key_d.var() : gw.var() == key_s.var()) {
+      if (true) {
+        CRAB_LOG("tvpi-dbm-tvpi", crab::outs() << "layer 2\n";);
+        // layer 2: process new edges by eliminating remaining y or x
+        const std::vector<key_t> &keys2 = forward ? ys.first : xs.first;
+        for (auto &k : keys2) {
+          vert_id v = find_vert(
+              k, ((forward ? ys.second : xs.second) ? tmp_vert_map : vert_map));
+          for (vert_id vgw : (forward ? g.preds(v) : g.succs(v))) {
+            if (rev_map[vgw] == boost::none) {
               continue;
             }
-            if (forward ? k.coeff() == key_s.coeff()
-                        : k.coeff() == key_d.coeff()) {
+            key_t gw = *rev_map[vgw];
+            if (gw.var() == k.var()) {
               continue;
             }
-            Wt h = forward ? g_excl.edge_val(v, vgw) : g_excl.edge_val(vgw, v);
-            Wt c = g_excl.edge_val(src, dst);
-            CRAB_LOG("tvpi-dbm-tvpi",
-                     forward
-                         ? crab::outs() << "resultant2(" << key_d << "-"
-                                        << key_s << " <= " << c << ", " << k
-                                        << "-" << gw << " <= " << h
-                                        << "), eliminating " << k.var() << "\n"
-                         : crab::outs()
-                               << "resultant2(" << gw << "-" << k << " <= " << h
-                               << ", " << key_d << "-" << key_s << " <= " << c
-                               << "), eliminating " << k.var() << "\n");
+            if (k == ax && gw == by) {
+              continue;
+            }
+            for (auto sd : need_to_close) {
+              vert_id src = sd.first, dst = sd.second;
+              key_t key_s = *rev_map[src], key_d = *rev_map[dst];
+              if (forward ? gw.var() == key_d.var() : k.var() == key_s.var()) {
+                continue;
+              }
+              if (forward ? k.coeff() == key_s.coeff()
+                          : gw.coeff() == key_d.coeff()) {
+                continue;
+              }
+              Wt h =
+                  forward ? g_excl.edge_val(vgw, v) : g_excl.edge_val(v, vgw);
+              Wt c = g_excl.edge_val(src, dst);
+              CRAB_LOG("tvpi-dbm-tvpi",
+                       forward ? crab::outs()
+                                     << "resultant2(" << key_d << "-" << key_s
+                                     << " <= " << c << ", " << k << "-" << gw
+                                     << " <= " << h << "), eliminating "
+                                     << key_s.var() << "\n"
+                               : crab::outs() << "resultant2(" << gw << "-" << k
+                                              << " <= " << h << ", " << key_d
+                                              << "-" << key_s << " <= " << c
+                                              << "), eliminating "
+                                              << key_d.var() << "\n");
 
-            auto [new_a, new_b, new_c] =
-                forward ? tvpi_op::resultant(key_d.coeff(), key_d.var(),
-                                             key_s.coeff(), key_s.var(), c,
-                                             k.coeff(), gw.coeff(), gw.var(), h)
-                        : tvpi_op::resultant(gw.coeff(), gw.var(), k.coeff(),
-                                             k.var(), h, key_d.coeff(),
-                                             key_s.coeff(), key_s.var(), c);
-            bool skip = false;
-            key_t new_key_src =
-                forward ? key_t(key_d.var(), new_b) : key_t(gw.var(), new_b);
-            key_t new_key_dest =
-                forward ? key_t(gw.var(), new_a) : key_t(key_s.var(), new_a);
-            Wt t(ntow::convert(new_c, overflow));
-            if (overflow) {
-              skip = true;
-            } else if (new_a == 0 && new_b == 0) {
-              skip = true;
-            } else if (!((new_a == 1 && new_b != 1 &&
-                          tvpi_utils::find(coeffs, new_b)) ||
-                         (new_b == 1 && new_a != 1 &&
-                          tvpi_utils::find(coeffs, new_a)))) {
-              skip = true;
-            }
-            if (!skip) {
-              wt_ref_t w;
-              vert_id src = new_b == 0 ? 0 : find_vert(new_key_src, vert_map);
-              vert_id dest = new_a == 0 ? 0 : find_vert(new_key_dest, vert_map);
-              if (g.lookup(src, dest, w)) {
-                if (w.get() <= t) {
-                  skip = true;
-                } else {
-                  g.update_edge(src, t, dest, min_op);
-                  if (!repair_potential(src, dest)) {
-                    assert(0 && "Unreachable");
-                    set_to_bottom();
-                  }
-                  check_potential(g, potential, __LINE__);
-                }
-              } else {
-                delta.push_back({{src, dest}, {t}});
+              auto [new_a, new_b, new_c] =
+                  forward
+                      ? tvpi_op::resultant(key_d.coeff(), key_d.var(),
+                                           key_s.coeff(), key_s.var(), c,
+                                           k.coeff(), gw.coeff(), gw.var(), h)
+                      : tvpi_op::resultant(gw.coeff(), gw.var(), k.coeff(),
+                                           k.var(), h, key_d.coeff(),
+                                           key_s.coeff(), key_s.var(), c);
+              bool skip = false;
+              key_t new_key_src =
+                  forward ? key_t(gw.var(), new_b) : key_t(key_s.var(), new_b);
+              key_t new_key_dest =
+                  forward ? key_t(key_d.var(), new_a) : key_t(gw.var(), new_a);
+              Wt t(ntow::convert(new_c, overflow));
+              if (overflow) {
+                skip = true;
+              } else if (new_a == 0 && new_b == 0) {
+                skip = true;
+              } else if (!((new_a == 1 && new_b != 1 &&
+                            tvpi_utils::find(coeffs, new_b)) ||
+                           (new_b == 1 && new_a != 1 &&
+                            tvpi_utils::find(coeffs, new_a)))) {
+                skip = true;
               }
               if (!skip) {
-                need_to_close2.push_back({src, dest});
+                wt_ref_t w;
+                bool src_is_new = forward ? is_vert_new(vgw) : is_vert_new(src);
+                vert_id src = new_b == 0 ? 0
+                                         : find_vert(new_key_src,
+                                                     src_is_new ? tmp_vert_map
+                                                                : vert_map);
+                bool dest_is_new = forward ? is_vert_new(dst) : is_vert_new(v);
+                vert_id dest = new_a == 0 ? 0
+                                          : find_vert(new_key_dest,
+                                                      dest_is_new ? tmp_vert_map
+                                                                  : vert_map);
+                if (g.lookup(src, dest, w) && w.get() <= t) {
+                  skip = true;
+                }
+                if (!skip) {
+                  delta.push_back({{src, dest}, {t}});
+                  // need_to_close2.push_back({src, dest});
+                }
               }
+              CRAB_LOG("tvpi-dbm-tvpi",
+                       crab::outs() << "=>>>" << new_key_dest << "-"
+                                    << new_key_src << "<=" << t
+                                    << (skip ? ", skip" : ", added") << "\n");
             }
-            CRAB_LOG("tvpi-dbm-tvpi",
-                     crab::outs()
-                         << "=>>>" << new_key_dest << "-" << new_key_src
-                         << "<=" << t << (skip ? ", skip" : ", added") << "\n");
           }
         }
-      }
-      for (auto &e : delta) { // add new edges
-        g.set_edge(e.first.first, e.second, e.first.second);
-        if (!repair_potential(e.first.first, e.first.second)) {
-          assert(0 && "Unreachable");
-          set_to_bottom();
-        }
-      }
-      check_potential(g, potential, __LINE__);
-      delta.clear();
-      for (auto sd : need_to_close2) {
-        vert_id src = sd.first;
-        vert_id dest = sd.second;
-        if (!repair_potential(src, dest)) {
-          assert(0 && "Unreachable");
-          set_to_bottom();
-        }
-        if (src == 0 || dest == 0) {
-          continue;
-        }
         check_potential(g, potential, __LINE__);
-        close_over_edge(src, dest);
+        GrOps::apply_delta(g, delta); // add new edges
         check_potential(g, potential, __LINE__);
+        need_to_close2.clear();
       }
+      need_to_close.clear();
     };
 
     // process all vertices relate to y
@@ -1455,8 +1489,8 @@ protected:
       key_t y = diffcst.first.second;
       Wt k = diffcst.second;
 
-      auto vy = get_vert(y);
-      auto vx = get_vert(x);
+      auto vy = get_vert_opt(y);
+      auto vx = get_vert_opt(x);
       if (vx && vy && is_unsat_edge(*vy, *vx, k)) {
         return true;
       }
@@ -1464,13 +1498,13 @@ protected:
 
     // check interval constraints
     for (auto &ub : ubs) {
-      auto vx = get_vert(ub.first);
+      auto vx = get_vert_opt(ub.first);
       if (vx && is_unsat_edge(0, *vx, ub.second)) {
         return true;
       }
     }
     for (auto &lb : lbs) {
-      auto vx = get_vert(lb.first);
+      auto vx = get_vert_opt(lb.first);
       if (vx && is_unsat_edge(*vx, 0, -lb.second)) {
         return true;
       }
@@ -1985,6 +2019,12 @@ public:
     else if (is_top())
       return false;
     else {
+      CRAB_LOG("tvpi-dbm-<=", crab::outs() << "Before <=:\n"
+                                           << "DBM 1\n"
+                                           << *this << "\n"
+                                           << "DBM 2\n"
+                                           << o << "\n");
+
       auto leq_op = [](const DBM_t &left, const DBM_t &right) -> bool {
         // left is normalized but right doesn't need to.
 
@@ -2039,9 +2079,17 @@ public:
       if (need_normalization()) {
         DBM_t left(*this);
         left.normalize();
-        return leq_op(left, o);
+        bool res = leq_op(left, o);
+        CRAB_LOG("tvpi-dbm-<=", crab::outs()
+                                    << "Result <=: " << (res ? "true" : "false")
+                                    << "\n");
+        return res;
       } else {
-        return leq_op(*this, o);
+        bool res = leq_op(*this, o);
+        CRAB_LOG("tvpi-dbm-<=", crab::outs()
+                                    << "Result <=: " << (res ? "true" : "false")
+                                    << "\n");
+        return res;
       }
     }
   }
@@ -2698,12 +2746,46 @@ public:
         Wt_min min_op;
         edge_vector cst_edges;
 
+        // auto get_or_insert_vertex_for_newx = [&](key_t k) -> vert_id {
+        //   auto it = tmp_vert_map.find(k);
+        //   if (it == tmp_vert_map.end()) {
+        //     vert_id v = g.new_vertex(); // graph tracks empty vertex id
+        //     assert(v <= rev_map.size());
+        //     if (v == rev_map.size()) {
+        //       rev_map.push_back(k);
+        //       potential.push_back(Wt(0));
+        //     } else {
+        //       potential[v] = Wt(0);
+        //       rev_map[v] = k;
+        //     }
+        //     tmp_vert_map.insert(vmap_elt_t(k, v));
+        //     assert(v != 0);
+        //     return v;
+        //   } else {
+        //     return it->second;
+        //   }
+        // };
+
         for (auto diff : diffs_lb) {
           cst_edges.push_back({{v, get_vert(diff.first)}, -diff.second});
+          // for (auto &c : crab_domain_params_man::get().coefficients()) {
+          //   unsigned newc = diff.first.coeff() * c;
+          //   if (auto vby = get_vert_opt(key_t(diff.first.var(), newc))) {
+          //     vert_id vax = get_or_insert_vertex_for_newx(key_t(x, c));
+          //     cst_edges.push_back({{vax, *vby}, -(diff.second * Wt(c))});
+          //   }
+          // }
         }
 
         for (auto diff : diffs_ub) {
           cst_edges.push_back({{get_vert(diff.first), v}, diff.second});
+          // for (auto &c : crab_domain_params_man::get().coefficients()) {
+          //   unsigned newc = diff.first.coeff() * c;
+          //   if (auto vby = get_vert_opt(key_t(diff.first.var(), newc))) {
+          //     vert_id vax = get_or_insert_vertex_for_newx(key_t(x, c));
+          //     cst_edges.push_back({{*vby, vax}, diff.second * Wt(c)});
+          //   }
+          // }
         }
 
         for (auto diff : cst_edges) {
@@ -2719,6 +2801,10 @@ public:
           reduce_tvpi_edge(src, dest, v, tmp_vert_map);
           check_potential(g, potential, __LINE__);
         }
+
+        edge_vector delta;
+        GrOps::close_after_assign(g, potential, 0, delta);
+        GrOps::apply_delta(g, delta);
 
         if (lb_w) {
           g.update_edge(v, *lb_w, 0, min_op);
@@ -2843,6 +2929,18 @@ public:
     CRAB_LOG("tvpi-dbm-+=", crab::outs() << "---" << cst << "\n"
                                          << *this << "\n");
 
+    auto process_tvpi_expression = [&](const linear_expression_t &expr) {
+      for (auto &c : crab_domain_params_man::get().coefficients()) {
+        if (auto newexpr = try_rewrite_linear_expression(expr, c)) {
+          CRAB_LOG("tvpi-dbm-+=3", crab::outs()
+                                       << "processing (" << expr << ") * " << c
+                                       << " rewritten " << *newexpr << "\n");
+          if (!add_linear_leq(*newexpr)) {
+            set_to_bottom();
+          }
+        }
+      }
+    };
     if (cst.is_tautology()) {
       return;
     }
@@ -2862,6 +2960,7 @@ public:
       if (!add_linear_leq(cst.expression())) {
         set_to_bottom();
       }
+      process_tvpi_expression(cst.expression());
     } else if (cst.is_strict_inequality()) { // e < c
       // We try to convert a strict to non-strict.
       auto nc =
@@ -2871,12 +2970,15 @@ public:
         if (!add_linear_leq(nc.expression())) {
           set_to_bottom();
         }
+        process_tvpi_expression(nc.expression());
       }
     } else if (cst.is_equality()) {
       const linear_expression_t &exp = cst.expression();
       if (!add_linear_leq(exp) || !add_linear_leq(-exp)) {
         set_to_bottom();
       }
+      process_tvpi_expression(exp);
+      process_tvpi_expression(-exp);
       // g.check_adjs();
     } else if (cst.is_disequation()) {
       // We handle here the case x !=y by converting the disequation
