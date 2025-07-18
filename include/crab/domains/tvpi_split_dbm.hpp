@@ -18,7 +18,7 @@
 
 #define JOIN_CLOSE_AFTER_MEET
 // #define CHECK_POTENTIAL
-// #define SDBM_NO_NORMALIZE
+// #define TVPIDBM_NO_NORMALIZE
 #define USE_FLAT_MAP
 
 #ifdef USE_FLAT_MAP
@@ -1734,7 +1734,7 @@ protected:
   }
 
   bool need_normalization() const {
-#ifdef SDBM_NO_NORMALIZE
+#ifdef TVPIDBM_NO_NORMALIZE
     return false;
 #endif
     return unstable.size() > 0;
@@ -2097,7 +2097,7 @@ public:
 
 #pragma region Join
   void operator|=(const DBM_t &o) override {
-    TVPI_SPLIT_DBM_DOMAIN_SCOPED_STATS(".join");
+    TVPI_SPLIT_DBM_DOMAIN_SCOPED_STATS(".self_join");
 
     CRAB_LOG("tvpi-dbm", crab::outs() << "Before join:\n"
                                       << "DBM 1\n"
@@ -2122,7 +2122,6 @@ public:
         // Figure out the common renaming, initializing the
         // resulting potentials as we go.
         std::vector<vert_id> perm_x, perm_y;
-        std::vector<variable_t> perm_inv;
 
         std::vector<Wt> pot_rx, pot_ry;
         vert_map_t out_vmap;
@@ -2146,7 +2145,6 @@ public:
             // pot_ry.push_back(right.potential[p.second] - right.potential[0]);
             pot_ry.push_back(right.potential[(*it).second] -
                              right.potential[0]);
-            perm_inv.push_back(p.first.var());
             perm_x.push_back(p.second);
             perm_y.push_back((*it).second);
           }
