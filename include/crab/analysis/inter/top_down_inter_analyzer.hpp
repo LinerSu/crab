@@ -1216,7 +1216,10 @@ private:
     if (it != m_ctx.get_calling_context_table().end()) {
       auto &call_contexts = it->second;
       CRAB_LOG("inter-subsume",
-	  crab::outs() << "[INTER] Subsumption check at " << cs << "\n";);      
+               crab::outs() << "[INTER] Subsumption check at " << cs << "\n";);
+      CRAB_LOG("inter-subsume", crab::outs()
+                                    << "[INTER] Is inside recursive call? "
+                                    << inside_recursive_call << "\n";);
       CRAB_LOG("inter-subsume", if (call_contexts.empty()) {
 	  crab::outs() << "[INTER] There is no call contexts stored.\n";
 	});
@@ -1815,7 +1818,7 @@ public:
         m_ctx.get_call_stack().pop_back();
         entry_analysis->clear();
       }
-      CRAB_VERBOSE_IF(1, get_msg_stream()
+      CRAB_VERBOSE_IF(0, get_msg_stream()
                              << "Finished inter-procedural analysis\n";);
 
       if (::crab::CrabSanityCheckFlag) {
