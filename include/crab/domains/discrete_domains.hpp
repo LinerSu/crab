@@ -129,7 +129,12 @@ public:
   bool is_bottom() const { return (!m_is_top && m_set.empty()); }
 
   bool operator<=(const discrete_domain_t &other) const {
-    return other.m_is_top || (!m_is_top && m_set <= other.m_set);
+    if (is_bottom() || other.is_top()) {
+      return true;
+    } else if (is_top() || other.is_bottom()) {
+      return false;
+    }
+    return m_set <= other.m_set;
   }
 
   bool operator==(const discrete_domain_t &other) const {
