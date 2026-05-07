@@ -1,8 +1,14 @@
-add_library(Crab ${CRAB_LIBS_TYPE}
-  ##support
+add_library (CrabSupport ${CRAB_LIBS_TYPE}
   debug.cpp
   stats.cpp
   os.cpp
+  )
+
+add_library(Crab ${CRAB_LIBS_TYPE}
+  ##support
+  # debug.cpp
+  # stats.cpp
+  # os.cpp
   ##abstract domains
   abstract_domain_params.cpp
   array_adaptive_impl.cpp
@@ -28,7 +34,7 @@ add_library(Crab ${CRAB_LIBS_TYPE}
   tag.cpp
   )
 
-target_link_libraries(Crab ${GMP_LIB})
+target_link_libraries(Crab ${GMP_LIB} CrabSupport)
 
 install(TARGETS Crab
   LIBRARY DESTINATION crab/lib
