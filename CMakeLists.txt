@@ -142,6 +142,15 @@ else()
   set(GMP_LIB "")
 endif()
 
+#---------- GMPXX (C++ interface to GMP, needed by TVPI) ---------#
+get_filename_component (GMP_SEARCH_PATH ${GMP_INCLUDE_DIR} PATH)
+find_package(GMPXX QUIET)
+if (GMPXX_FOUND)
+  set(GMPXX_LIB ${GMPXX_LIB})
+else()
+  set(GMPXX_LIB "gmpxx")
+endif()
+
 #---------- MPFR ---------#
 if (CRAB_USE_APRON OR CRAB_USE_ELINA)
   get_filename_component (GMP_SEARCH_PATH ${GMP_INCLUDE_DIR} PATH)
@@ -289,12 +298,13 @@ endif()
     
 #------- Create CRAB_LIBS and CRAB_INCLUDE_DIRS for Crab clients -------#
 set (CRAB_DEPS_LIBS
-  ${LDD_LIBRARY} 
+  ${LDD_LIBRARY}
   ${PPLITE_LIBRARY}
   ${APRON_LIBRARY}
   ${FLINT_LIBRARY}
   ${ELINA_LIBRARY}
-  ${MPFR_LIBRARIES} 
+  ${MPFR_LIBRARIES}
+  ${GMPXX_LIB}
   ${GMP_LIB})
 
 if (TopLevel)
@@ -325,6 +335,8 @@ endif()
 #------- Compile Crab library and optionally tests -----#
 include_directories(${crab_SOURCE_DIR}/include)
 include_directories(${CMAKE_BINARY_DIR}/include)
+# TVPI internal headers use relative includes; expose their directory
+include_directories(${crab_SOURCE_DIR}/include/crab/domains/tvpi_impl)
 configure_file(include/crab/config.h.cmake
                 ${CMAKE_BINARY_DIR}/include/crab/config.h )
 add_subdirectory(lib)

@@ -3,6 +3,12 @@ add_library(Crab ${CRAB_LIBS_TYPE}
   debug.cpp
   stats.cpp
   os.cpp
+  ##TVPI library (self-contained, used by tvpi_domain)
+  tvpi_interval.cpp
+  tvpi_planar.cpp
+  tvpi_polyhedron.cpp
+  tvpi_tvpi.cpp
+  tvpi_memory.cpp
   ##abstract domains
   abstract_domain_params.cpp
   array_adaptive_impl.cpp
@@ -28,7 +34,7 @@ add_library(Crab ${CRAB_LIBS_TYPE}
   tag.cpp
   )
 
-target_link_libraries(Crab ${GMP_LIB})
+target_link_libraries(Crab ${GMPXX_LIB} ${GMP_LIB})
 
 install(TARGETS Crab
   LIBRARY DESTINATION crab/lib
