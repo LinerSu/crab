@@ -295,6 +295,12 @@ else ()
   message (STATUS "Crab: Elina domains will NOT be available")
 endif ()
 
+option(CRAB_USE_TVPI_DBM_FIXED_COEFF OFF)
+
+if(CRAB_USE_TVPI_DBM_FIXED_COEFF)
+  add_definitions(-DTVPI_DBM_FIXED_COEFFICIENTS=1)
+endif()
+
 #------ Crab Options for logging and stats ----------#
 # Enable always logging
 set(NCRABLOG FALSE)
