@@ -2483,6 +2483,77 @@ user-defined assertion checker
 0  Number of total unreachable checks
 
 === End ./test-bin/region-8 ===
+
+=== Begin ./test-bin/region-9 ===
+entry:
+  region_init(R:region(int));
+  p := make_ref(R:region(int),4,as_0);
+  q := make_ref(R:region(int),4,as_1);
+  crab_intrinsic(add_tag,R:region(int),p:ref,1:int32);
+  store_to_ref(R:region(int),q:ref,0:int32);
+  goto ret;
+ret:
+  b1 = crab_intrinsic(check_does_not_have_tag,R:region(int),p:ref,1:int32);
+  assert(b1);
+
+
+Invariants using Region
+Abstract trace: entry ret
+user-defined assertion checker
+0  Number of total safe checks
+0  Number of total error checks
+1  Number of total warning checks
+0  Number of total unreachable checks
+
+cfg1 (add_tag, store through another reference): expected 0 safe and 1 warning checks: OK
+
+entry:
+  region_init(S:region(int));
+  region_init(D:region(int));
+  s := make_ref(S:region(int),4,as_0);
+  crab_intrinsic(add_tag,S:region(int),s:ref,1:int32);
+  d1 := make_ref(D:region(int),8,as_1);
+  (D:region(int),d2:ref) := gep_ref(D:region(int),d1:ref + 4);
+  crab_intrinsic(move_tag,S:region(int),s:ref,D:region(int),d1:ref);
+  store_to_ref(D:region(int),d2:ref,0:int32);
+  goto ret;
+ret:
+  b1 = crab_intrinsic(check_does_not_have_tag,D:region(int),d1:ref,1:int32);
+  assert(b1);
+
+
+Invariants using Region
+Abstract trace: entry ret
+user-defined assertion checker
+0  Number of total safe checks
+0  Number of total error checks
+1  Number of total warning checks
+0  Number of total unreachable checks
+
+cfg2 (move_tag, store through another reference): expected 0 safe and 1 warning checks: OK
+
+entry:
+  region_init(R:region(int));
+  p := make_ref(R:region(int),4,as_0);
+  crab_intrinsic(add_tag,R:region(int),p:ref,1:int32);
+  store_to_ref(R:region(int),p:ref,0:int32);
+  goto ret;
+ret:
+  b1 = crab_intrinsic(check_does_not_have_tag,R:region(int),p:ref,1:int32);
+  assert(b1);
+
+
+Invariants using Region
+Abstract trace: entry ret
+user-defined assertion checker
+1  Number of total safe checks
+0  Number of total error checks
+0  Number of total warning checks
+0  Number of total unreachable checks
+
+cfg3 (singleton: strong update drops the tag): expected 1 safe and 0 warning checks: OK
+
+=== End ./test-bin/region-9 ===
 === Begin ./test-bin/soct ===
 entry:
   k = 200;

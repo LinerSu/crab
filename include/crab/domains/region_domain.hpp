@@ -1395,6 +1395,31 @@ public:
   }
 
   // Write the content of val to the address pointed by ref in rgn.
+  // A tag intrinsic (add_tag/move_tag) models a library write into rgn
+  // that the CFG does not contain as a store: memcpy/memmove of unknown
+  // size, read/fread into a buffer, getenv/sscanf results, etc. After it the
+  // region is no longer "uninitialized": a later ref_store must not treat
+  // itself as the region's first write and strong-update a non-singleton
+  // region (that would erase the tags just moved in). Mirrors what ref_store
+  // itself does with init_val(); singleton regions (refcount 0/1) are still
+  // strongly updated exactly as before.
+  void mark_region_may_written(const variable_t &rgn) {
+    // Note: not guarded by is_tracked_region: with skip_unknown_regions
+    // an unknown-typed region is untracked for values but ref_store still
+    // performs (and strong-updates) its tag update, so the flag must be
+    // maintained for it as well.
+    if (is_bottom() || !rgn.get_type().is_region()) {
+      return;
+    }
+    region_domain_impl::region_info rgn_info = m_rgn_env.at(rgn);
+    // Only raise "never written" to "may be written"; a region already known
+    // to be written (top, or true if it ever occurs) is left as it is.
+    if (rgn_info.init_val().is_false()) {
+      rgn_info.init_val() = boolean_value::top();
+      m_rgn_env.set(rgn, rgn_info);
+    }
+  }
+
   void ref_store(const variable_t &ref, const variable_t &rgn,
                  const variable_or_constant_t &val) override {
     REGION_DOMAIN_SCOPED_STATS(".ref_store");
@@ -2680,6 +2705,7 @@ public:
         // the region
         m_tag_env.set(rgn, find_tag_or_not(rgn) | tag_set(tag));
         add_path_tags(rgn);
+        mark_region_may_written(rgn);
       }
     } else if (name == "remove_tag") {
       if (crab_domain_params_man::get().region_tag_analysis()) {
@@ -2778,6 +2804,7 @@ public:
         error_if_not_ref(ref2);
         m_tag_env.set(rgn2, find_tag_or_not(rgn1));
         add_path_tags(rgn2);
+        mark_region_may_written(rgn2);
       }
     } else if (name == "is_dereferenceable") {
       if (crab_domain_params_man::get().region_is_dereferenceable()) {
