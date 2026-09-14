@@ -601,3 +601,103 @@ BOOST_AUTO_TEST_CASE(unknown_typed_new_region_accumulates_across_calls) {
   // The caller's object still carries tag 2 after the call.
   EXPECT_COUNTS(inter({foo, m}), 0, 1);
 }
+
+//===--------------------------------------------------------------------===//
+// (R10) Round 3: the reference renaming at call boundaries is now an
+// explicit tag copy in region_domain::callee_entry (formal := tags of the
+// actual) and caller_continuation (output actual := tags of the callee's
+// formal), because ref_assume is tag-neutral again.  This checks the
+// *output* direction independently: bar returns a reference it loaded from
+// a region it tainted itself, and a second one that is clean.
+//===--------------------------------------------------------------------===//
+BOOST_AUTO_TEST_CASE(reference_output_of_a_call_keeps_the_callee_tags) {
+  for (int tainted = 0; tainted < 2; ++tainted) {
+    variable_factory_t vfac;
+    crab::tag_manager as;
+    // bar() -> (ref out)
+    z_var out(vfac["out"], crab::REF_TYPE);
+    z_var RP(vfac["RP"], crab::REG_REF_TYPE), pp(vfac["pp"], crab::REF_TYPE);
+    z_var RT(vfac["RT"], crab::REG_INT_TYPE, 32), u(vfac["u"], crab::REF_TYPE);
+    z_var res(vfac["res"], crab::REF_TYPE);
+    z_var RO(vfac["RO"], crab::REG_REF_TYPE), po(vfac["po"], crab::REF_TYPE);
+    z_var b(vfac["b"], crab::BOOL_TYPE);
+
+    function_decl<z_number, varname_t> dbar("bar", {}, {out});
+    z_cfg_t bar("entry", "exit", dbar);
+    auto &be = bar.insert("entry");
+    auto &bx = bar.insert("exit");
+    be >> bx;
+    be.region_init(RT);
+    be.make_ref(u, RT, int32_cst(4), as.mk_tag());
+    be.region_init(RP);
+    be.make_ref(pp, RP, int32_cst(8), as.mk_tag());
+    be.store_to_ref(pp, RP, u);
+    if (tainted) {
+      be.intrinsic("add_tag", {}, {RP, pp, int32_cst(1)});
+    }
+    be.load_from_ref(out, pp, RP);   // out := *pp  -> tags(RP)
+
+    function_decl<z_number, varname_t> dmain("main", {}, {});
+    z_cfg_t m("entry", "exit", dmain);
+    auto &me = m.insert("entry");
+    auto &mx = m.insert("exit");
+    me >> mx;
+    me.region_init(RO);
+    me.make_ref(po, RO, int32_cst(8), as.mk_tag());
+    mx.callsite("bar", {res}, {});
+    mx.store_to_ref(po, RO, res);    // the returned reference lands in RO
+    mx.intrinsic("check_does_not_have_tag", {b}, {RO, po, int32_cst(1)});
+    mx.bool_assert(b);
+    if (tainted) {
+      EXPECT_COUNTS(inter({bar, m}), 0, 1);
+    } else {
+      EXPECT_COUNTS(inter({bar, m}), 1, 0);
+    }
+  }
+}
+
+//===--------------------------------------------------------------------===//
+// (R11) Round 3 probe: the reference-count of a "new" region is reset to the
+// callee's one-object view at every call boundary
+// (caller_continuation: forget the outputs, then meet with the callee's
+// region_info).  After two calls the region holds two objects but its
+// refcount still says "one", so the next store_to_ref takes the strong-update
+// path (region_domain.hpp, ref_store) and clears the tag of the first object.
+//
+// This is the region model's reference counting, not a tag rule: the same
+// condition drives the strong update of the *numeric* content.  The taint
+// analysis inherits it.
+//===--------------------------------------------------------------------===//
+BOOST_AUTO_TEST_CASE(refcount_of_a_new_region_after_two_calls) {
+  variable_factory_t vfac;
+  crab::tag_manager as;
+  z_var R(vfac["R"], crab::REG_INT_TYPE, 32), o(vfac["o"], crab::REF_TYPE);
+  z_var a(vfac["a"], crab::REF_TYPE), b(vfac["b"], crab::REF_TYPE);
+  z_var b1(vfac["b1"], crab::BOOL_TYPE);
+
+  // (o, R) = mk()
+  function_decl<z_number, varname_t> dmk("mk", {}, {o, R});
+  z_cfg_t mk("entry", "exit", dmk);
+  auto &ke = mk.insert("entry");
+  auto &kx = mk.insert("exit");
+  ke >> kx;
+  ke.region_init(R);
+  ke.make_ref(o, R, int32_cst(4), as.mk_tag());
+
+  function_decl<z_number, varname_t> dmain("main", {}, {});
+  z_cfg_t m("entry", "exit", dmain);
+  auto &me = m.insert("entry");
+  auto &m2 = m.insert("bb2");
+  auto &mx = m.insert("exit");
+  me >> m2;
+  m2 >> mx;
+  me.region_init(R);                  // clam initialises output-only regions
+  me.callsite("mk", {a, R}, {});      // first object
+  me.intrinsic("add_tag", {}, {R, a, int32_cst(1)});
+  m2.callsite("mk", {b, R}, {});      // second object, same region
+  m2.store_to_ref(b, R, int32_cst(0));// must be a *weak* update: 2 objects
+  mx.intrinsic("check_does_not_have_tag", {b1}, {R, a, int32_cst(1)});
+  mx.bool_assert(b1);
+  // The first object still carries the tag.
+  EXPECT_COUNTS(inter({mk, m}), 0, 1);
+}
