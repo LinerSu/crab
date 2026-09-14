@@ -1169,6 +1169,13 @@ bool tree<Key, Value, ValueEqual>::compare(
                 (!compare_left_to_right && po.default_is_top())) {
               return false;
             }
+            if (t->is_leaf()) {
+              // t is a leaf whose only key differs from s's key: each
+              // tree has a key the other lacks, and a tree never
+              // stores the default value, so the two are incomparable
+              // whatever the default is.
+              return false;
+            }
           }
           if (compare_left_to_right && po.default_is_top() && !t->is_leaf()) {
             return false;

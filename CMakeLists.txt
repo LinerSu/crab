@@ -115,7 +115,10 @@ if (CUSTOM_BOOST_ROOT)
 endif()
 
 if (CRAB_ENABLE_TESTS)
-  find_package (Boost 1.65.0 COMPONENTS program_options REQUIRED)
+  # unit_test_framework is optional: it only enables the Boost.Test
+  # self-checking suites under tests/unit (see tests/CMakeLists.txt).
+  find_package (Boost 1.65.0 COMPONENTS program_options
+                OPTIONAL_COMPONENTS unit_test_framework REQUIRED)
   set(Boost_USE_STATIC_LIBS ON)
   if (CRAB_BUILD_LIBS_SHARED)
     set(Boost_USE_STATIC_LIBS OFF)
