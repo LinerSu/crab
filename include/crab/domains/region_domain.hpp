@@ -2586,6 +2586,12 @@ public:
         }
       }
     }
+    // Precondition of the snapshot: the ghost variables of a region
+    // have the same names before and after the call, i.e. the ghost
+    // variable manager does not rename (need_renaming() == false: the
+    // base domain uses the region domain's variable names, as clam and
+    // the tests do). With renaming the pre-call constraints would be
+    // projected onto stale names.
     boost::optional<base_abstract_domain_t> base_pre;
     if (!saved_infos.empty()) {
       base_pre = m_base_dom;
