@@ -2522,9 +2522,35 @@ public:
     // since it's commonly used at the top of the hierarchy of
     // domains.
     REGION_DOMAIN_SCOPED_STATS(".caller_cont");    
+    // Tag analysis: a typed region that the callsite defines as an
+    // output without passing it as an input is a region in which the
+    // callee creates objects (a "new" region of the callee). The
+    // caller may already hold objects in that region, created at this
+    // or at other call sites, and those objects keep their tags: the
+    // generic transformer replaces the region by the callee's view
+    // (forget the outputs, meet), so the caller's tags are unioned
+    // back afterwards. Unknown-typed outputs are fresh views (clam
+    // casts them into a typed region, where region_cast unions) and
+    // are left to the generic transformer.
+    std::vector<std::pair<variable_t, tag_set>> saved_tags;
+    if (crab_domain_params_man::get().region_tag_analysis() && !is_bottom()) {
+      std::set<variable_t> ins(callsite.get_caller_in_params().begin(),
+                               callsite.get_caller_in_params().end());
+      for (const variable_t &v : callsite.get_caller_out_params()) {
+        if (v.get_type().is_region() &&
+            !v.get_type().is_unknown_region() && ins.count(v) == 0) {
+          saved_tags.emplace_back(v, find_tag_or_not(v));
+        }
+      }
+    }
     inter_abstract_operations<region_domain_t,
 			      true /*implement call transformers*/>::    
       caller_continuation(callsite, callee, *this);
+    if (!is_bottom()) {
+      for (auto const &kv : saved_tags) {
+        m_tag_env.set(kv.first, find_tag_or_not(kv.first) | kv.second);
+      }
+    }
   }
   
   void forget(const variable_vector_t &variables) override {

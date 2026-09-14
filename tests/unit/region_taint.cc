@@ -266,6 +266,45 @@ BOOST_AUTO_TEST_CASE(call_return_keeps_both_sides) {
   EXPECT_COUNTS(inter({foo, bar, m}), 2, 2);
 }
 
+// A callee that creates objects in a region it returns ("new" region,
+// passed as an output only) is called twice; between the calls the
+// caller tags the object it got from the first call. The second call
+// must not erase that tag: the region collects the objects of both
+// calls (the caller initialises it at entry; the second call's clean
+// objects join it).
+BOOST_AUTO_TEST_CASE(new_region_accumulates_across_calls) {
+  variable_factory_t vfac;
+  crab::tag_manager as;
+  z_var R(vfac["R"], crab::REG_INT_TYPE, 32);
+  z_var r(vfac["r"], crab::REF_TYPE), q(vfac["q"], crab::REF_TYPE);
+  z_var b1(vfac["b1"], crab::BOOL_TYPE), b2(vfac["b2"], crab::BOOL_TYPE);
+
+  function_decl<z_number, varname_t> dfoo("foo", {}, {R});
+  z_cfg_t foo("entry", "exit", dfoo);
+  auto &fe = foo.insert("entry");
+  auto &fx = foo.insert("exit");
+  fe >> fx;
+  fe.region_init(R);
+  fe.make_ref(r, R, int32_cst(4), as.mk_tag());
+  fe.store_to_ref(r, R, int32_cst(0));
+
+  function_decl<z_number, varname_t> dmain("main", {}, {});
+  z_cfg_t m("entry", "exit", dmain);
+  auto &me = m.insert("entry");
+  auto &mx = m.insert("exit");
+  me >> mx;
+  me.region_init(R);                 // empty at entry (clam does this)
+  me.callsite("foo", {R}, {});
+  me.make_ref(q, R, int32_cst(4), as.mk_tag());
+  me.intrinsic("add_tag", {}, {R, q, int32_cst(2)}); // the caller tags an object
+  mx.callsite("foo", {R}, {});       // clean objects join R
+  mx.intrinsic("check_does_not_have_tag", {b1}, {R, q, int32_cst(2)});
+  mx.bool_assert(b1);                // warning: tag 2 survives
+  mx.intrinsic("check_does_not_have_tag", {b2}, {R, q, int32_cst(1)});
+  mx.bool_assert(b2);                // safe: nobody used tag 1
+  EXPECT_COUNTS(inter({foo, m}), 1, 1);
+}
+
 // (v) havoc: the statement "x := nondet" defines x. Without the
 // closed-world policy x is unknown and a value stored from it makes
 // the region unknown; with region.tag_havoc_clean it is clean. A
