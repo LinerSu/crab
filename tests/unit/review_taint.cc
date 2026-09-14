@@ -701,3 +701,51 @@ BOOST_AUTO_TEST_CASE(refcount_of_a_new_region_after_two_calls) {
   // The first object still carries the tag.
   EXPECT_COUNTS(inter({mk, m}), 0, 1);
 }
+
+//===--------------------------------------------------------------------===//
+// (R12) Round 4: the reference count and the written flag of a "new" region
+// are now combined with the caller's across a call, but the region's
+// numeric *content* is still replaced by the callee's view (the generic
+// transformer forgets the outputs and meets with the callee's exit).
+//
+// That is a region-model issue rather than a tag rule, but it is not
+// taint-neutral: the replaced content can prune a path and hide a flow.
+// Here the caller's object holds 7 and is tainted; the callee's object holds
+// 5; after the second call a load of the caller's object is believed to be 5,
+// so "assume(v != 5)" is infeasible and the sink under it is vacuously safe.
+//===--------------------------------------------------------------------===//
+BOOST_AUTO_TEST_CASE(callee_content_must_not_prune_the_callers_object) {
+  variable_factory_t vfac;
+  crab::tag_manager as;
+  z_var R(vfac["R"], crab::REG_INT_TYPE, 32), o(vfac["o"], crab::REF_TYPE);
+  z_var a(vfac["a"], crab::REF_TYPE), b(vfac["b"], crab::REF_TYPE);
+  z_var v(vfac["v"], crab::INT_TYPE, 32), b1(vfac["b1"], crab::BOOL_TYPE);
+
+  // (o, R) = mk5():  one object holding 5
+  function_decl<z_number, varname_t> dmk("mk5", {}, {o, R});
+  z_cfg_t mk(" entry", "exit", dmk);
+  auto &ke = mk.insert(" entry");
+  auto &kx = mk.insert("exit");
+  ke >> kx;
+  ke.region_init(R);
+  ke.make_ref(o, R, int32_cst(4), as.mk_tag());
+  ke.store_to_ref(o, R, int32_cst(5));
+
+  function_decl<z_number, varname_t> dmain("main", {}, {});
+  z_cfg_t m("entry", "exit", dmain);
+  auto &me = m.insert("entry");
+  auto &m2 = m.insert("bb2");
+  auto &mx = m.insert("exit");
+  me >> m2;
+  m2 >> mx;
+  me.region_init(R);
+  me.callsite("mk5", {a, R}, {});
+  me.store_to_ref(a, R, int32_cst(7));       // the caller's object holds 7
+  me.intrinsic("add_tag", {}, {R, a, int32_cst(1)});
+  m2.callsite("mk5", {b, R}, {});            // a second object holding 5
+  m2.load_from_ref(v, a, R);
+  m2.assume(v != 5);                         // feasible: the caller's object is 7
+  mx.intrinsic("check_does_not_have_tag", {b1}, {R, a, int32_cst(1)});
+  mx.bool_assert(b1);
+  EXPECT_COUNTS(inter({mk, m}), 0, 1);
+}
