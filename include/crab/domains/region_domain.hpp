@@ -1094,8 +1094,11 @@ public:
       m_rgn_equiv_classes.add(rhs_rgn, lhs_rgn);
     }
     if (crab_domain_params_man::get().region_tag_analysis()) {
-      // lhs_rgn is a fresh name for the memory of rhs_rgn: a
-      // definition, like the allocation-site component above.
+      // region_copy is "lhs_rgn := rhs_rgn": lhs_rgn is a fresh name
+      // for the memory of rhs_rgn (crab/clam use it only to rename
+      // function parameters), so this is a definition, like the
+      // allocation-site component above. A non-fresh lhs_rgn would
+      // lose its own tags, as it loses its numeric content.
       m_tag_env.set(lhs_rgn, find_tag_or_not(rhs_rgn));
     }
 
@@ -1171,8 +1174,20 @@ public:
       m_rgn_equiv_classes.add(src_rgn, dst_rgn);
     }
     if (crab_domain_params_man::get().region_tag_analysis()) {
-      // dst_rgn is defined by the cast: its tags are those of src_rgn.
-      m_tag_env.set(dst_rgn, find_tag_or_not(src_rgn));
+      if (dst_rgn.get_type().is_unknown_region()) {
+        // Cast to an unknown-typed region: dst_rgn is a fresh view of
+        // src_rgn (e.g. to pass it to a callee): a definition.
+        m_tag_env.set(dst_rgn, find_tag_or_not(src_rgn));
+      } else {
+        // Cast into a typed region (e.g. the objects a callee created
+        // in an output region join the caller's region): the region
+        // keeps the tags of the objects it already held. The client
+        // is expected to region_init the typed region before its
+        // first cast (clam does, at function entry); an
+        // uninitialised destination is unknown and stays so.
+        m_tag_env.set(dst_rgn,
+                      find_tag_or_not(dst_rgn) | find_tag_or_not(src_rgn));
+      }
     }
 
     region_domain_impl::region_info src_rgn_info = m_rgn_env.at(src_rgn);
@@ -1801,6 +1816,16 @@ public:
       convert_ref_cst_to_linear_cst(ref_cst, ghost_variable_kind::ADDRESS);
     m_base_dom += addr_lin_csts;
     m_is_bottom = m_base_dom.is_bottom();
+    if (!m_is_bottom && ref_cst.is_equality() && ref_cst.is_binary() &&
+        crab_domain_params_man::get().region_tag_analysis()) {
+      // p == q: both references denote the same value, whose tags lie
+      // within both approximations (the meet refinement of an
+      // assume). This is also how a formal reference receives the
+      // tags of its actual at a call boundary (inter_transformers_impl::unify).
+      tag_set tags = find_tag_or_not(ref_cst.lhs()) & find_tag_or_not(ref_cst.rhs());
+      m_tag_env.set(ref_cst.lhs(), tags);
+      m_tag_env.set(ref_cst.rhs(), tags);
+    }
     
     /** 
      * Having p relop q (where relop is not equality) DOESN'T
@@ -2844,7 +2869,18 @@ public:
         error_if_not_rgn(rgn2);
         variable_t ref2 = inputs[3].get_variable();
         error_if_not_ref(ref2);
-        m_tag_env.set(rgn2, find_tag_or_not(rgn1));
+        // Moving the tags of rgn1 into rgn2 (memcpy-like) overwrites
+        // the cells reached by ref2. That is a strong update only if
+        // rgn2 represents at most one concrete object (same refcount
+        // condition as ref_store); otherwise the other objects of
+        // rgn2 keep their tags and the update is weak.
+        auto rgn2_info = m_rgn_env.at(rgn2);
+        const small_range &num_refs2 = rgn2_info.refcount_val();
+        if (num_refs2.is_zero() || num_refs2.is_one()) {
+          m_tag_env.set(rgn2, find_tag_or_not(rgn1));
+        } else {
+          m_tag_env.set(rgn2, find_tag_or_not(rgn2) | find_tag_or_not(rgn1));
+        }
         add_path_tags(rgn2);
         mark_region_may_written(rgn2);
       }

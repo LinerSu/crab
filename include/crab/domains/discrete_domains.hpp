@@ -138,7 +138,10 @@ public:
   }
 
   bool operator==(const discrete_domain_t &other) const {
-    return (m_is_top && other.m_is_top) || (m_set == other.m_set);
+    // top (the universe) is never equal to a finite set, in particular
+    // not to the empty one.
+    return (m_is_top == other.m_is_top) &&
+           (m_is_top || (m_set == other.m_set));
   }
 
   void operator|=(const discrete_domain_t &other) { *this = *this | other; }

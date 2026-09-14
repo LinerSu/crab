@@ -45,7 +45,12 @@ inline void unify(Domain &inv, const typename Domain::variable_t &lhs,
   } else if (ty.is_integer() || ty.is_real()) {
     inv.assign(lhs, rhs);
   } else if (ty.is_reference()) {
-    inv -= lhs;
+    // Renaming rhs into lhs: project lhs out (forget: "no information",
+    // as opposed to operator-=, which is the havoc statement and may
+    // carry a policy), then constrain it to be equal to rhs; the
+    // domain's ref_assume propagates what it tracks about rhs (e.g.
+    // tags) into lhs.
+    inv.forget({lhs});
     inv.ref_assume(reference_constraint_t::mk_eq(lhs, rhs, number_t(0)));
   } else if (ty.is_region()) {
     inv.region_copy(lhs, rhs);

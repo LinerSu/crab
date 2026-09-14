@@ -449,6 +449,42 @@ BOOST_AUTO_TEST_CASE(region_copy_and_cast_are_definitions) {
   }
 }
 
+// Casting into a typed region merges the incoming objects' tags with
+// those the region already holds (objects created by a callee join the
+// caller's region at every call site): tag 2 held by Z survives a cast
+// of a region carrying tag 1, and a clean incoming region does not
+// clean Z.
+BOOST_AUTO_TEST_CASE(region_cast_into_typed_region_is_a_union) {
+  for (int incoming_tainted = 0; incoming_tainted < 2; ++incoming_tainted) {
+    vars v;
+    z_var U(v.vfac["U"], crab::REG_UNKNOWN_TYPE), Z(v.vfac["Z"], crab::REG_INT_TYPE, 32),
+        z(v.vfac["z"], crab::REF_TYPE);
+    z_cfg_t cfg("entry", "ret");
+    auto &entry = cfg.insert("entry");
+    auto &ret = cfg.insert("ret");
+    entry >> ret;
+    entry.region_init(Z);
+    entry.make_ref(z, Z, int32_cst(4), v.as.mk_tag());
+    entry.intrinsic("add_tag", {}, {Z, z, int32_cst(2)});
+    entry.region_init(v.R);
+    entry.make_ref(v.p, v.R, int32_cst(4), v.as.mk_tag());
+    if (incoming_tainted) {
+      entry.intrinsic("add_tag", {}, {v.R, v.p, int32_cst(1)});
+    }
+    entry.region_cast(v.R, U);   // view of R
+    entry.region_cast(U, Z);     // R's objects join Z
+    ret.intrinsic("check_does_not_have_tag", {v.b}, {Z, z, int32_cst(2)});
+    ret.bool_assert(v.b);        // warning: Z still holds tag 2
+    ret.intrinsic("check_does_not_have_tag", {v.b2}, {Z, z, int32_cst(1)});
+    ret.bool_assert(v.b2);       // tag 1 only if it came in
+    if (incoming_tainted) {
+      EXPECT_COUNTS(intra(cfg), 0, 2);
+    } else {
+      EXPECT_COUNTS(intra(cfg), 1, 1);
+    }
+  }
+}
+
 // A boolean defined by a reference comparison whose operands have
 // disjoint allocation sites (the region domain's shortcut) is still
 // tagged from its operands: two clean references give a clean boolean.
