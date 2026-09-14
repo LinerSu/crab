@@ -1816,16 +1816,9 @@ public:
       convert_ref_cst_to_linear_cst(ref_cst, ghost_variable_kind::ADDRESS);
     m_base_dom += addr_lin_csts;
     m_is_bottom = m_base_dom.is_bottom();
-    if (!m_is_bottom && ref_cst.is_equality() && ref_cst.is_binary() &&
-        crab_domain_params_man::get().region_tag_analysis()) {
-      // p == q: both references denote the same value, whose tags lie
-      // within both approximations (the meet refinement of an
-      // assume). This is also how a formal reference receives the
-      // tags of its actual at a call boundary (inter_transformers_impl::unify).
-      tag_set tags = find_tag_or_not(ref_cst.lhs()) & find_tag_or_not(ref_cst.rhs());
-      m_tag_env.set(ref_cst.lhs(), tags);
-      m_tag_env.set(ref_cst.rhs(), tags);
-    }
+    // Tags are provenance, not a property of the address: two
+    // references that are equal as values may carry different tags,
+    // so an assume on references does not touch the tag environment.
     
     /** 
      * Having p relop q (where relop is not equality) DOESN'T
@@ -2506,10 +2499,31 @@ public:
     // since it's commonly used at the top of the hierarchy of
     // domains.
     REGION_DOMAIN_SCOPED_STATS(".callee_entry");        
+    // Tag analysis: the generic transformer renames a reference actual
+    // into its formal with "forget; ref_assume(formal == actual)", and
+    // an assume on references is tag-neutral (tags are provenance, not
+    // a property of the address). The renaming is a copy, so the
+    // formal receives the actual's tags explicitly.
+    std::vector<std::pair<variable_t, tag_set>> ref_formals;
+    if (crab_domain_params_man::get().region_tag_analysis() &&
+        !caller.is_bottom()) {
+      const auto &formals = callsite.get_callee_in_params();
+      const auto &actuals = callsite.get_caller_in_params();
+      for (unsigned i = 0, e = formals.size(); i < e; ++i) {
+        if (formals[i].get_type().is_reference()) {
+          ref_formals.emplace_back(formals[i],
+                                   caller.find_tag_or_not(actuals[i]));
+        }
+      }
+    }
     inter_abstract_operations<region_domain_t,
 			      true /*implement call transformers*/>::
       callee_entry(callsite, caller, *this);
-      
+    if (!is_bottom()) {
+      for (auto const &kv : ref_formals) {
+        m_tag_env.set(kv.first, kv.second);
+      }
+    }
   }
 
   void caller_continuation(const callsite_info<variable_t> &callsite,
@@ -2522,24 +2536,37 @@ public:
     // since it's commonly used at the top of the hierarchy of
     // domains.
     REGION_DOMAIN_SCOPED_STATS(".caller_cont");    
-    // Tag analysis: a typed region that the callsite defines as an
-    // output without passing it as an input is a region in which the
-    // callee creates objects (a "new" region of the callee). The
-    // caller may already hold objects in that region, created at this
-    // or at other call sites, and those objects keep their tags: the
-    // generic transformer replaces the region by the callee's view
-    // (forget the outputs, meet), so the caller's tags are unioned
-    // back afterwards. Unknown-typed outputs are fresh views (clam
-    // casts them into a typed region, where region_cast unions) and
-    // are left to the generic transformer.
+    // Tag analysis, two corrections after the generic transformer
+    // (forget the outputs, meet with the callee's exit):
+    //
+    // 1. A region that the callsite defines as an output without
+    //    passing it as an input is a region in which the callee creates
+    //    objects (a "new" region of the callee). The caller may already
+    //    hold objects in that region, created at this or at other call
+    //    sites, and those objects keep their tags: the caller's
+    //    pre-call tags are unioned back. The client initialises such
+    //    regions at function entry (clam does), so a region that never
+    //    received objects is clean rather than unknown.
+    //
+    // 2. A reference output is renamed from its formal with
+    //    "forget; ref_assume(actual == formal)", and an assume on
+    //    references is tag-neutral (tags are provenance, not a property
+    //    of the address): the actual receives the formal's tags
+    //    explicitly.
     std::vector<std::pair<variable_t, tag_set>> saved_tags;
-    if (crab_domain_params_man::get().region_tag_analysis() && !is_bottom()) {
+    std::vector<std::pair<variable_t, tag_set>> ref_outputs;
+    if (crab_domain_params_man::get().region_tag_analysis() && !is_bottom() &&
+        !callee.is_bottom()) {
       std::set<variable_t> ins(callsite.get_caller_in_params().begin(),
                                callsite.get_caller_in_params().end());
-      for (const variable_t &v : callsite.get_caller_out_params()) {
-        if (v.get_type().is_region() &&
-            !v.get_type().is_unknown_region() && ins.count(v) == 0) {
+      const auto &out_actuals = callsite.get_caller_out_params();
+      const auto &out_formals = callsite.get_callee_out_params();
+      for (unsigned i = 0, e = out_actuals.size(); i < e; ++i) {
+        const variable_t &v = out_actuals[i];
+        if (v.get_type().is_region() && ins.count(v) == 0) {
           saved_tags.emplace_back(v, find_tag_or_not(v));
+        } else if (v.get_type().is_reference()) {
+          ref_outputs.emplace_back(v, callee.find_tag_or_not(out_formals[i]));
         }
       }
     }
@@ -2549,6 +2576,9 @@ public:
     if (!is_bottom()) {
       for (auto const &kv : saved_tags) {
         m_tag_env.set(kv.first, find_tag_or_not(kv.first) | kv.second);
+      }
+      for (auto const &kv : ref_outputs) {
+        m_tag_env.set(kv.first, kv.second);
       }
     }
   }
@@ -2895,18 +2925,12 @@ public:
         error_if_not_rgn(rgn2);
         variable_t ref2 = inputs[3].get_variable();
         error_if_not_ref(ref2);
-        // Moving the tags of rgn1 into rgn2 (memcpy-like) overwrites
-        // the cells reached by ref2. That is a strong update only if
-        // rgn2 represents at most one concrete object (same refcount
-        // condition as ref_store); otherwise the other objects of
-        // rgn2 keep their tags and the update is weak.
-        auto rgn2_info = m_rgn_env.at(rgn2);
-        const small_range &num_refs2 = rgn2_info.refcount_val();
-        if (num_refs2.is_zero() || num_refs2.is_one()) {
-          m_tag_env.set(rgn2, find_tag_or_not(rgn1));
-        } else {
-          m_tag_env.set(rgn2, find_tag_or_not(rgn2) | find_tag_or_not(rgn1));
-        }
+        // Moving the tags of rgn1 into rgn2 (a memcpy-like
+        // propagation) adds rgn1's tags to rgn2. It never clears
+        // rgn2: the intrinsic carries no size, so even a single
+        // object may be only partially overwritten (the paper's
+        // propagation rule, whose kill set contains no cell).
+        m_tag_env.set(rgn2, find_tag_or_not(rgn2) | find_tag_or_not(rgn1));
         add_path_tags(rgn2);
         mark_region_may_written(rgn2);
       }

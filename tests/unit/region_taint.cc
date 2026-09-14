@@ -305,6 +305,44 @@ BOOST_AUTO_TEST_CASE(new_region_accumulates_across_calls) {
   EXPECT_COUNTS(inter({foo, m}), 1, 1);
 }
 
+// A reference returned by a callee carries the callee's tags for it
+// (int_to_ref of a tainted integer inside foo); storing it into a
+// region of references in the caller taints that region.
+BOOST_AUTO_TEST_CASE(reference_output_carries_callee_tags) {
+  variable_factory_t vfac;
+  crab::tag_manager as;
+  z_var RI(vfac["RI"], crab::REG_INT_TYPE, 32), pi(vfac["pi"], crab::REF_TYPE),
+      iv(vfac["iv"], crab::INT_TYPE, 32), RT(vfac["RT"], crab::REG_INT_TYPE, 32),
+      ret(vfac["ret"], crab::REF_TYPE), RP(vfac["RP"], crab::REG_REF_TYPE),
+      pp(vfac["pp"], crab::REF_TYPE), q(vfac["q"], crab::REF_TYPE),
+      b(vfac["b"], crab::BOOL_TYPE);
+
+  function_decl<z_number, varname_t> dfoo("foo", {}, {ret});
+  z_cfg_t foo("entry", "exit", dfoo);
+  auto &fe = foo.insert("entry");
+  auto &fx = foo.insert("exit");
+  fe >> fx;
+  fe.region_init(RI);
+  fe.make_ref(pi, RI, int32_cst(4), as.mk_tag());
+  fe.intrinsic("add_tag", {}, {RI, pi, int32_cst(1)});
+  fe.load_from_ref(iv, pi, RI);
+  fe.region_init(RT);
+  fe.int_to_ref(iv, RT, ret);            // a tainted reference
+
+  function_decl<z_number, varname_t> dmain("main", {}, {});
+  z_cfg_t m("entry", "exit", dmain);
+  auto &me = m.insert("entry");
+  auto &mx = m.insert("exit");
+  me >> mx;
+  me.region_init(RP);
+  me.make_ref(pp, RP, int32_cst(8), as.mk_tag());
+  me.callsite("foo", {q}, {});
+  mx.store_to_ref(pp, RP, q);
+  mx.intrinsic("check_does_not_have_tag", {b}, {RP, pp, int32_cst(1)});
+  mx.bool_assert(b);                     // warning
+  EXPECT_COUNTS(inter({foo, m}), 0, 1);
+}
+
 // (v) havoc: the statement "x := nondet" defines x. Without the
 // closed-world policy x is unknown and a value stored from it makes
 // the region unknown; with region.tag_havoc_clean it is clean. A
