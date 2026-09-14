@@ -152,6 +152,10 @@ class region_domain_params {
   bool m_is_dereferenceable;
   // reason about unknown regions
   bool m_skip_unknown_regions;
+  // tag analysis: a havoc'ed scalar or reference carries no tag
+  // (closed-world policy: taint enters only through declared
+  // sources). If false, a havoc'ed variable is unknown (any tag).
+  bool m_tag_havoc_clean;
 
   friend class crab_domain_params;  
 public:
@@ -160,18 +164,21 @@ public:
       m_deallocation(false),
       m_tag_analysis(true),
       m_is_dereferenceable(false),
-      m_skip_unknown_regions(true) {
+      m_skip_unknown_regions(true),
+      m_tag_havoc_clean(false) {
   }
   region_domain_params(bool allocation_sites,
 		       bool deallocation,
 		       bool tag_analysis,
 		       bool is_dereferenceable,
-		       bool skip_unknown_regions)
+		       bool skip_unknown_regions,
+		       bool tag_havoc_clean = false)
     : m_allocation_sites(allocation_sites),
       m_deallocation(deallocation),
       m_tag_analysis(tag_analysis),
       m_is_dereferenceable(is_dereferenceable),
-      m_skip_unknown_regions(skip_unknown_regions) {
+      m_skip_unknown_regions(skip_unknown_regions),
+      m_tag_havoc_clean(tag_havoc_clean) {
   }
 
   bool region_allocation_sites() const {
@@ -188,6 +195,9 @@ public:
   }
   bool region_skip_unknown_regions() const {
     return m_skip_unknown_regions;
+  }
+  bool region_tag_havoc_clean() const {
+    return m_tag_havoc_clean;
   }
   void update_params(const region_domain_params& p);
   void write(crab::crab_os &o) const;

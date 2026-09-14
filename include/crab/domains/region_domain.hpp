@@ -493,12 +493,18 @@ private:
     }
   }
 
+  // Tags that may be attached to v. A variable that is not in the
+  // tag environment is *unknown*: it may carry any tag
+  // (separate_discrete_domain reads an absent key as top, and so do
+  // we). "Clean" is always stored explicitly as the empty set, by the
+  // transfer functions that establish it (region_init, constants,
+  // strong stores of constants, ref_make, havoc under
+  // region.tag_havoc_clean).
   tag_set find_tag_or_not(const variable_t &v) const {
-    if (auto tag_val = m_tag_env.find(v)) {
-      return tag_set(*tag_val);
-    } else {
+    if (m_tag_env.is_bottom()) {
       return tag_set::bottom();
     }
+    return m_tag_env.at(v);
   }
 
   /** Renaming expressions in case the base domain has a different
@@ -986,7 +992,20 @@ public:
         }
       }
       if (crab_domain_params_man::get().region_tag_analysis()) {
-        m_tag_env -= v;
+        // operator-= implements the havoc statement (see
+        // fwd_abs_transformers::exec(havoc_t)): v gets a fresh,
+        // nondeterministic value. Under the closed-world taint policy
+        // (region.tag_havoc_clean: taint enters only through declared
+        // sources) such a value carries no tag, unless v is a region,
+        // whose contents we no longer track. Without the policy v
+        // becomes unknown (any tag). The projections forget/project
+        // are not affected: they always make variables unknown.
+        if (crab_domain_params_man::get().region_tag_havoc_clean() &&
+            !v.get_type().is_region()) {
+          m_tag_env.set(v, tag_set::bottom());
+        } else {
+          m_tag_env -= v;
+        }
         for (auto &dep : m_ctrl_deps) {
           dep -= v;
         }
@@ -1075,8 +1094,9 @@ public:
       m_rgn_equiv_classes.add(rhs_rgn, lhs_rgn);
     }
     if (crab_domain_params_man::get().region_tag_analysis()) {
-      m_tag_env.set(lhs_rgn,
-                    find_tag_or_not(rhs_rgn) | find_tag_or_not(lhs_rgn));
+      // lhs_rgn is a fresh name for the memory of rhs_rgn: a
+      // definition, like the allocation-site component above.
+      m_tag_env.set(lhs_rgn, find_tag_or_not(rhs_rgn));
     }
 
     if (!is_tracked_region(rhs_rgn, rhs_rgn_info.type_val())) {
@@ -1151,8 +1171,8 @@ public:
       m_rgn_equiv_classes.add(src_rgn, dst_rgn);
     }
     if (crab_domain_params_man::get().region_tag_analysis()) {
-      m_tag_env.set(dst_rgn,
-                    find_tag_or_not(src_rgn) | find_tag_or_not(dst_rgn));
+      // dst_rgn is defined by the cast: its tags are those of src_rgn.
+      m_tag_env.set(dst_rgn, find_tag_or_not(src_rgn));
     }
 
     region_domain_impl::region_info src_rgn_info = m_rgn_env.at(src_rgn);
@@ -1229,6 +1249,12 @@ public:
     if (crab_domain_params_man::get().region_allocation_sites()) {
       // Associate allocation site as to ref
       m_alloc_env.set(ref, as);
+    }
+
+    if (crab_domain_params_man::get().region_tag_analysis()) {
+      // A fresh reference is a new address, not a value derived from
+      // a source: it carries no tag.
+      m_tag_env.set(ref, tag_set::bottom());
     }
 
     // Assign ghost variables to ref
@@ -1682,8 +1708,11 @@ public:
       }
 
       if (crab_domain_params_man::get().region_tag_analysis()) {
+        // ref2 is defined by this statement: its tags are those of
+        // ref1 (an accumulation with the old tags of ref2 would read
+        // a fresh ref2 as unknown).
         // merge_tags(ref2, offset.variables());
-        m_tag_env.set(ref2, find_tag_or_not(ref2) | find_tag_or_not(ref1));
+        m_tag_env.set(ref2, find_tag_or_not(ref1));
         add_path_tags(ref2);
       }
 
@@ -2130,6 +2159,10 @@ public:
                 auto true_cst = base_linear_constraint_t::get_true();
                 m_base_dom.assign_bool_cst(get_or_insert_gvars(lhs).get_var(),
                                            true_cst);
+              }
+              if (crab_domain_params_man::get().region_tag_analysis()) {
+                merge_tags(lhs, rhs.variables());
+                add_path_tags(lhs);
               }
               return;
             }
@@ -2728,8 +2761,8 @@ public:
         const small_range &num_refs = rgn_info.refcount_val();
         if (num_refs.is_zero() || num_refs.is_one()) {
           tag_set tags = find_tag_or_not(rgn);
-          // Skip top: m_tag_env.set would drop the key, which
-          // find_tag_or_not reads back as untainted.
+          // A tag cannot be removed from an unknown region (top): it
+          // stays unknown. Nothing to remove from a clean one.
           if (!tags.is_top() && !tags.is_bottom()) {
             m_tag_env.set(rgn, tags - tag);
           }
@@ -2756,8 +2789,13 @@ public:
               "region-tag-report", crab::outs()
                                        << "[Sink] " << rgn.get_debug_info()
                                        << "\ntainted source:\n";
-              for (auto const &t
-                   : tags) { crab::outs() << t << ", "; } crab::outs()
+              if (tags.is_top()) {
+                crab::outs() << "unknown (any tag)";
+              } else {
+                for (auto const &t : tags) {
+                  crab::outs() << t << ", ";
+                }
+              } crab::outs()
               << ";\n";);
           operator-=(bv);
         }
@@ -2771,10 +2809,14 @@ public:
         error_if_not_rgn(rgn);
         tag_set tags = find_tag_or_not(rgn);
         crab::outs() << "[Debug] Tags: \n{\n";
-        for (auto const &t : tags) {
-          crab::outs() << "  " << t << " |-> [";
-          // find srcs
-          crab::outs() << "];\n";
+        if (tags.is_top()) {
+          crab::outs() << "  unknown (any tag)\n";
+        } else {
+          for (auto const &t : tags) {
+            crab::outs() << "  " << t << " |-> [";
+            // find srcs
+            crab::outs() << "];\n";
+          }
         }
         crab::outs() << "}\n";
         if (!m_ctrl_deps.empty()) {

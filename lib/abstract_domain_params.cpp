@@ -67,6 +67,7 @@ void region_domain_params::update_params(const region_domain_params &params) {
   m_tag_analysis = params.region_tag_analysis();
   m_is_dereferenceable = params.region_is_dereferenceable();
   m_skip_unknown_regions = params.region_skip_unknown_regions(); 
+  m_tag_havoc_clean = params.region_tag_havoc_clean();
 }
 
 void region_domain_params::write(crab::crab_os &o) const {
@@ -76,6 +77,7 @@ void region_domain_params::write(crab::crab_os &o) const {
   o << "\ttag_analysis=" << m_tag_analysis << "\n";
   o << "\tis_dereferenceable=" << m_is_dereferenceable << "\n";
   o << "\tskip_unknown_regions=" << m_skip_unknown_regions << "\n";
+  o << "\ttag_havoc_clean=" << m_tag_havoc_clean << "\n";
 }
 
 void object_domain_params::update_params(const object_domain_params &params) {
@@ -170,7 +172,8 @@ void crab_domain_params::update_params(const crab_domain_params &p) {
 			   p.region_deallocation(),
 			   p.region_tag_analysis(),
 			   p.region_is_dereferenceable(),
-			   p.region_skip_unknown_regions());
+			   p.region_skip_unknown_regions(),
+			   p.region_tag_havoc_clean());
   object_domain_params obj_p(p.reduction_level(), p.singletons_in_base());
   zones_domain_params z_p(p.zones_chrome_dijkstra(),
 			  p.zones_widen_restabilize(),
@@ -279,6 +282,8 @@ void crab_domain_params::set_param(const std::string &param, const std::string &
     region_domain_params::m_is_dereferenceable = to_bool(val);
   } else if (param == "region.skip_unknown_regions") {
     region_domain_params::m_skip_unknown_regions = to_bool(val);
+  } else if (param == "region.tag_havoc_clean") {
+    region_domain_params::m_tag_havoc_clean = to_bool(val);
   } else if (param == "object.reduction_level") {
     object_domain_params::m_reduction_level = to_reduction_level_enum(val);
   } else if (param == "object.singletons_in_base") {
