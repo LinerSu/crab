@@ -2553,10 +2553,18 @@ public:
     //    references is tag-neutral (tags are provenance, not a property
     //    of the address): the actual receives the formal's tags
     //    explicitly.
+    //
+    // 3. For the same reason the reference count of such a region is
+    //    not the callee's (which counts the objects of this call
+    //    only) but the caller's pre-call count plus the callee's: two
+    //    calls that each create one object leave a region with two
+    //    objects, on which a later store is a weak update. Likewise
+    //    the region has been written if either side wrote it.
     std::vector<std::pair<variable_t, tag_set>> saved_tags;
+    std::vector<std::pair<variable_t, region_domain_impl::region_info>> saved_infos;
     std::vector<std::pair<variable_t, tag_set>> ref_outputs;
-    if (crab_domain_params_man::get().region_tag_analysis() && !is_bottom() &&
-        !callee.is_bottom()) {
+    if (!is_bottom() && !callee.is_bottom()) {
+      const bool tags = crab_domain_params_man::get().region_tag_analysis();
       std::set<variable_t> ins(callsite.get_caller_in_params().begin(),
                                callsite.get_caller_in_params().end());
       const auto &out_actuals = callsite.get_caller_out_params();
@@ -2564,8 +2572,11 @@ public:
       for (unsigned i = 0, e = out_actuals.size(); i < e; ++i) {
         const variable_t &v = out_actuals[i];
         if (v.get_type().is_region() && ins.count(v) == 0) {
-          saved_tags.emplace_back(v, find_tag_or_not(v));
-        } else if (v.get_type().is_reference()) {
+          saved_infos.emplace_back(v, m_rgn_env.at(v));
+          if (tags) {
+            saved_tags.emplace_back(v, find_tag_or_not(v));
+          }
+        } else if (tags && v.get_type().is_reference()) {
           ref_outputs.emplace_back(v, callee.find_tag_or_not(out_formals[i]));
         }
       }
@@ -2574,6 +2585,28 @@ public:
 			      true /*implement call transformers*/>::    
       caller_continuation(callsite, callee, *this);
     if (!is_bottom()) {
+      for (auto const &kv : saved_infos) {
+        const small_range &pre = kv.second.refcount_val();
+        region_domain_impl::region_info post = m_rgn_env.at(kv.first);
+        const small_range &post_count = post.refcount_val();
+        small_range count = post_count;
+        if (pre.is_bottom() || pre.is_zero()) {
+          count = post_count;
+        } else if (post_count.is_bottom() || post_count.is_zero()) {
+          count = pre;
+        } else if ((pre.is_one() || pre <= small_range::oneOrMore()) &&
+                   (post_count.is_one() ||
+                    post_count <= small_range::oneOrMore())) {
+          // at least one object on each side: at least two
+          count = small_range::oneOrMore();
+        } else {
+          count = small_range::top();
+        }
+        m_rgn_env.set(kv.first,
+                      region_domain_impl::region_info(
+                          count, kv.second.init_val() | post.init_val(),
+                          post.type_val()));
+      }
       for (auto const &kv : saved_tags) {
         m_tag_env.set(kv.first, find_tag_or_not(kv.first) | kv.second);
       }
