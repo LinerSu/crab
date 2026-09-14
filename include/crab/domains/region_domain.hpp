@@ -2560,6 +2560,11 @@ public:
     //    calls that each create one object leave a region with two
     //    objects, on which a later store is a weak update. Likewise
     //    the region has been written if either side wrote it.
+    //
+    // 4. And the numeric content of such a region is the join of the
+    //    caller's pre-call content and the callee's: the caller's
+    //    objects keep their values (the callee's view alone could
+    //    prune a feasible path in the caller).
     std::vector<std::pair<variable_t, tag_set>> saved_tags;
     std::vector<std::pair<variable_t, region_domain_impl::region_info>> saved_infos;
     std::vector<std::pair<variable_t, tag_set>> ref_outputs;
@@ -2581,10 +2586,33 @@ public:
         }
       }
     }
+    boost::optional<base_abstract_domain_t> base_pre;
+    if (!saved_infos.empty()) {
+      base_pre = m_base_dom;
+    }
     inter_abstract_operations<region_domain_t,
 			      true /*implement call transformers*/>::    
       caller_continuation(callsite, callee, *this);
     if (!is_bottom()) {
+      if (base_pre) {
+        base_variable_vector_t gvs;
+        for (auto const &kv : saved_infos) {
+          if (is_tracked_region(kv.first)) {
+            get_or_insert_gvars(kv.first).add(gvs);
+          }
+        }
+        if (!gvs.empty()) {
+          // (post with the region's content replaced by the caller's
+          // pre-call content) joined with post = post with the content
+          // joined, everything else unchanged.
+          base_abstract_domain_t pre_view(*base_pre);
+          pre_view.project(gvs);
+          base_abstract_domain_t view(m_base_dom);
+          view.forget(gvs);
+          view = view & pre_view;
+          m_base_dom = m_base_dom | view;
+        }
+      }
       for (auto const &kv : saved_infos) {
         const small_range &pre = kv.second.refcount_val();
         region_domain_impl::region_info post = m_rgn_env.at(kv.first);
