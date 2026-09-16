@@ -749,3 +749,63 @@ BOOST_AUTO_TEST_CASE(callee_content_must_not_prune_the_callers_object) {
   mx.bool_assert(b1);
   EXPECT_COUNTS(inter({mk, m}), 0, 1);
 }
+
+//===--------------------------------------------------------------------===//
+// (R13) Post-final: the content-merge guard.  The numeric merge of the
+// caller's pre-call content into an output-only region now applies only when
+// the pre-call reference count is neither bottom nor ExactlyZero
+// (region_domain.hpp, caller_continuation).  The question is whether a
+// region whose count is ExactlyZero can hold content the caller can observe
+// after the call.
+//
+// Crab's own answer elsewhere is "no, but we are not sure": ref_store takes
+// the *strong* update path when num_refs.is_zero() and prints
+// "ref_store from a region with zero refcounter. Perhaps region objects are
+// allocated outside the code under analysis."  This case builds exactly that
+// situation -- a reference into R obtained without a make_ref in R, so R's
+// count stays ExactlyZero while the caller stores 7 into it -- and checks
+// whether the guard then costs a taint verdict.
+//===--------------------------------------------------------------------===//
+BOOST_AUTO_TEST_CASE(content_merge_guard_with_a_zero_count_region) {
+  variable_factory_t vfac;
+  crab::tag_manager as;
+  z_var R(vfac["R"], crab::REG_INT_TYPE, 32), o(vfac["o"], crab::REF_TYPE);
+  z_var RP(vfac["RP"], crab::REG_REF_TYPE), pp(vfac["pp"], crab::REF_TYPE);
+  z_var p(vfac["p"], crab::REF_TYPE), a(vfac["a"], crab::REF_TYPE);
+  z_var v(vfac["v"], crab::INT_TYPE, 32), b1(vfac["b1"], crab::BOOL_TYPE);
+
+  // (o, R) = mk5(): one object holding 5
+  function_decl<z_number, varname_t> dmk("mk5", {}, {o, R});
+  z_cfg_t mk("entry", "exit", dmk);
+  auto &ke = mk.insert("entry");
+  auto &kx = mk.insert("exit");
+  ke >> kx;
+  ke.region_init(R);
+  ke.make_ref(o, R, int32_cst(4), as.mk_tag());
+  ke.store_to_ref(o, R, int32_cst(5));
+
+  function_decl<z_number, varname_t> dmain("main", {}, {});
+  z_cfg_t m("entry", "exit", dmain);
+  auto &me = m.insert("entry");
+  auto &m2 = m.insert("bb2");
+  auto &mx = m.insert("exit");
+  me >> m2;
+  m2 >> mx;
+  me.region_init(R);                 // R: ExactlyZero references
+  me.region_init(RP);
+  me.make_ref(pp, RP, int32_cst(8), as.mk_tag());
+  me.load_from_ref(p, pp, RP);       // a reference into R, R's count untouched
+  me.store_to_ref(p, R, int32_cst(7));  // crab warns: zero refcounter
+  me.intrinsic("add_tag", {}, {R, p, int32_cst(1)});
+  m2.callsite("mk5", {a, R}, {});    // output-only: the callee's object holds 5
+  m2.load_from_ref(v, p, R);
+  m2.assume(v != 5);                 // feasible if the caller's 7 survives
+  mx.intrinsic("check_does_not_have_tag", {b1}, {R, p, int32_cst(1)});
+  mx.bool_assert(b1);
+  // With the hardened guard (the merge is skipped only for a region that
+  // is provably empty *and* never written) the caller's 7 survives the
+  // call although R's count is ExactlyZero: "assume(v != 5)" is feasible
+  // and the tagged content reaches the sink.  See docs/taint_dfa/review.md,
+  // "Post-final: content-merge guard".
+  EXPECT_COUNTS(inter({mk, m}), 0, 1);
+}

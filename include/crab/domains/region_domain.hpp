@@ -2603,12 +2603,17 @@ public:
       if (base_pre) {
         base_variable_vector_t gvs;
         for (auto const &kv : saved_infos) {
-          // Only a region that could already hold objects contributes
-          // its pre-call content: an empty region (no reference yet)
-          // has no content to keep, and its unconstrained ghost
-          // variables would only erase what the callee established.
+          // Only a region that could already hold content contributes
+          // its pre-call content: a region with no reference yet and
+          // never written (as region_init leaves it) has nothing to
+          // keep, and its unconstrained ghost variables would only
+          // erase what the callee established. A region written
+          // through a reference that was not created in it (a pointer
+          // loaded from memory) keeps a zero count but has content, so
+          // the written flag is checked as well.
           const small_range &pre = kv.second.refcount_val();
-          if (!pre.is_bottom() && !pre.is_zero() &&
+          const bool never_written = kv.second.init_val().is_false();
+          if (!pre.is_bottom() && !(pre.is_zero() && never_written) &&
               is_tracked_region(kv.first)) {
             get_or_insert_gvars(kv.first).add(gvs);
           }
